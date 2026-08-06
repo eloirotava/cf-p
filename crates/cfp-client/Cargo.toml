@@ -1,0 +1,15 @@
+[package]
+name = "cfp-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+cfp-protocol = { path = "../cfp-protocol" }
+clap.workspace = true
+futures-util.workspace = true
+tokio.workspace = true
+tokio-tungstenite.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
