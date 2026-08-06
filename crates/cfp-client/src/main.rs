@@ -51,8 +51,14 @@ async fn run(args: &Args) -> Result<()> {
         .await
         .context("servidor fechou durante auth")??;
     let frame = Frame::decode(&response.into_data())?;
+    if frame.kind == ERROR {
+        anyhow::bail!(
+            "servidor recusou a autenticacao: {}",
+            String::from_utf8_lossy(&frame.payload)
+        );
+    }
     if frame.kind != AUTH_OK {
-        anyhow::bail!("token recusado");
+        anyhow::bail!("resposta de autenticacao inesperada: {}", frame.kind);
     }
     info!("tunel autenticado");
 

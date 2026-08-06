@@ -106,8 +106,22 @@ where
     let client = clients
         .iter()
         .find(|c| c.token_sha256.eq_ignore_ascii_case(&digest))
-        .context("token invalido")?
-        .clone();
+        .cloned();
+    let Some(client) = client else {
+        writer
+            .send(Message::Binary(
+                Frame::new(
+                    ERROR,
+                    0,
+                    "token invalido: server.yaml deve conter o SHA-256 do token",
+                )
+                .encode()
+                .into(),
+            ))
+            .await?;
+        writer.close().await?;
+        anyhow::bail!("token invalido");
+    };
     writer
         .send(Message::Binary(Frame::new(AUTH_OK, 0, []).encode().into()))
         .await?;

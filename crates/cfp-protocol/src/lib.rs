@@ -7,6 +7,7 @@ pub const OPEN_OK: u8 = 4;
 pub const OPEN_ERROR: u8 = 5;
 pub const DATA: u8 = 6;
 pub const CLOSE: u8 = 7;
+pub const ERROR: u8 = 8;
 
 #[derive(Debug)]
 pub struct Frame {

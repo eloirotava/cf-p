@@ -218,12 +218,17 @@ Nesta primeira versão, as rotas pertencem ao hash do token. Assim, tokens
 diferentes ativam conjuntos diferentes de portas. O token em texto puro nunca
 precisa ficar no arquivo da VPS.
 
-Para gerar um token e o hash correspondente:
+**`token_sha256` não recebe o token em texto puro.** O valor `SEU_TOKEN` dos
+exemplos é apenas um placeholder. Gere um par pronto com:
 
 ```bash
-TOKEN="$(openssl rand -hex 32)"
-printf '%s' "$TOKEN" | sha256sum
+./scripts/generate-token.sh
 ```
+
+O script imprime dois valores diferentes: copie o **hash** para
+`token_sha256` no `server.yaml`, reinicie o servidor e use o **token original**
+em `CFP_TOKEN` no cliente. Não use as aspas ou os títulos impressos como parte
+dos valores.
 
 Execução:
 
