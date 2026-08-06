@@ -5,10 +5,10 @@ Uma alternativa mínima ao `cloudflared`, composta por dois executáveis:
 - `cfp-client`: binário pequeno que roda junto dos serviços privados;
 - `cfp-server`: processo na VPS com IP público que publica portas e domínios.
 
-> O transporte QUIC está sendo projetado isoladamente na branch
-> `feature/quic-transport`. O desenho, as restrições de UDP/443 e o fallback WSS
-> estão em [`docs/quic-transport.md`](docs/quic-transport.md); a implementação
-> principal continua usando WSS enquanto esse transporte não estiver completo.
+Um segundo cliente mínimo em C está especificado em
+[`docs/c-client.md`](docs/c-client.md). O documento separa corretamente um
+executável pequeno com bibliotecas dinâmicas de um pacote realmente estático e
+autossuficiente, e inclui um script para medir o piso de tamanho TLS no host.
 
 ## Instalação rápida na VPS
 
