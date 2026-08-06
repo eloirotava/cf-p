@@ -5,6 +5,40 @@ Uma alternativa mínima ao `cloudflared`, composta por dois executáveis:
 - `cfp-client`: binário pequeno que roda junto dos serviços privados;
 - `cfp-server`: processo na VPS com IP público que publica portas e domínios.
 
+## Instalação rápida na VPS
+
+O projeto ainda é distribuído como código-fonte, portanto a VPS precisa do
+toolchain Rust para gerar os dois executáveis. Em Debian ou Ubuntu, como `root`:
+
+```bash
+./scripts/install-rust.sh
+source "$HOME/.cargo/env"
+cargo build --release
+```
+
+O script instala `build-essential`, `ca-certificates`, `curl` e `pkg-config`,
+instala o Rust estável pelo `rustup` com o perfil mínimo e disponibiliza
+`cargo`. Não é necessário instalar `libssl-dev`, pois este projeto usa
+`rustls`.
+
+Depois do build, os programas ficam em:
+
+```text
+target/release/cfp-server
+target/release/cfp-client
+```
+
+Se preferir executar os comandos manualmente:
+
+```bash
+apt-get update
+apt-get install -y build-essential ca-certificates curl pkg-config
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+  | sh -s -- -y --profile minimal
+source "$HOME/.cargo/env"
+cargo build --release
+```
+
 ## Decisão de projeto
 
 O transporte do MVP será **WebSocket binário sobre TLS (`wss://`) na porta
