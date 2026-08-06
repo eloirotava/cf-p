@@ -1,1 +1,260 @@
 # cf-p
+
+Uma alternativa mínima ao `cloudflared`, composta por dois executáveis:
+
+- `cfp-client`: binário pequeno que roda junto dos serviços privados;
+- `cfp-server`: processo na VPS com IP público que publica portas e domínios.
+
+## Decisão de projeto
+
+O transporte do MVP será **WebSocket binário sobre TLS (`wss://`) na porta
+443**. O cliente inicia uma conexão de saída parecida com qualquer WebSocket
+HTTPS, portanto atravessa NAT e a maioria dos proxies sem exigir portas ou
+protocolos incomuns.
+
+```text
+Internet                     VPS                              rede privada
+────────                     ───                              ────────────
+browser ── HTTPS ─────┐
+                      ├──> cfp-server :443
+cfp-client ── WSS ────┘         │                                  ▲
+                                └── streams no WebSocket ───────────┘
+```
+
+O endpoint do agente pode ser, por exemplo,
+`wss://tunnel.exemplo.com/_cfp/connect`. O mesmo listener `:443` atende sites
+normais e upgrades WebSocket, separando-os por hostname e caminho. Isso evita a
+complexidade de usar ALPN próprio e faz o túnel parecer tráfego WebSocket
+convencional para a rede intermediária.
+
+WebSocket não torna o conteúdo invisível ao operador da VPS: TLS protege o
+trecho cliente–VPS, mas o servidor termina essa conexão. Se a rota usar TLS
+passthrough, o TLS da aplicação permanece ponta a ponta.
+
+## Exemplo completo atrás de NAT
+
+Sim, esse é exatamente o fluxo suportado. Supondo que a máquina privada rode
+RDP em `127.0.0.1:3389`:
+
+1. `cfp-client` abre **de dentro para fora** uma conexão persistente para
+   `wss://tunnel.exemplo.com/_cfp/connect`, usando TCP **443** (não 433);
+2. a VPS mantém essa sessão associada ao cliente autenticado `casa`;
+3. `cfp-server` abre publicamente `0.0.0.0:33890`;
+4. quando alguém conecta em `IP_DA_VPS:33890`, o servidor cria um novo
+   `stream_id` e envia `OPEN` pela sessão WSS existente;
+5. o cliente recebe `OPEN`, conecta localmente em `127.0.0.1:3389` e confirma
+   com `OPEN_OK`;
+6. servidor e cliente transportam os bytes do RDP em mensagens `DATA` até um
+   dos lados fechar a conexão.
+
+```text
+mstsc ── TCP :33890 ──> VPS/cfp-server
+                              ║
+                              ║ stream multiplexado dentro de WSS/TCP :443
+                              ║ conexão sempre iniciada pelo cliente
+                              ▼
+                         cfp-client ── TCP :3389 ──> RDP local
+```
+
+O roteador da rede privada não precisa de port forwarding: para ele existe
+somente uma conexão TCP de saída para `:443`. Firewall e security group da VPS,
+por outro lado, precisam liberar tanto `443/tcp` quanto cada porta pública, como
+`33890/tcp`.
+
+Para um site, o começo é semelhante: DNS aponta `app.exemplo.com` para a VPS e
+o navegador conecta ao `:443` público. O servidor escolhe a rota pelo hostname
+e carrega a requisição/resposta em outro `stream_id` da mesma sessão WSS até,
+por exemplo, `127.0.0.1:3000` na máquina privada.
+
+“Parecer navegação web normal” significa que o transporte usa handshake HTTPS,
+TLS válido e upgrade WebSocket padrão. Isso costuma ser compatível com NAT e
+proxies que aceitam WebSocket, mas não o torna indistinguível: firewalls com
+inspeção podem identificar uma conexão WSS longa e bloqueá-la. O projeto não
+deve tentar disfarçar ou burlar políticas de rede; deve usar WebSocket conforme
+o padrão, com hostname e certificado legítimos.
+
+## Linguagem e tamanho
+
+**Go não é a escolha deste projeto**, pois mesmo um programa simples carrega um
+runtime relativamente grande. Há duas opções adequadas:
+
+### Opção recomendada: Rust nos dois lados
+
+Rust oferece segurança de memória sem garbage collector e mantém uma única
+base de protocolo. O servidor pode usar um runtime assíncrono; o cliente deve
+evitar frameworks HTTP completos e implementar somente o necessário para o
+handshake e os frames WebSocket sobre uma biblioteca TLS pequena.
+
+Perfil de release sugerido:
+
+```toml
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+```
+
+Também devem ser desabilitadas features padrão não utilizadas, e o tamanho real
+do cliente deve ser verificado em CI. `musl` facilita distribuição estática,
+mas não garante por si só o menor binário; é necessário comparar os artefatos
+por plataforma.
+
+### Menor cliente possível: C no cliente, Rust no servidor
+
+Se cada kilobyte for prioritário, o cliente pode ser C, com uma biblioteca TLS
+compacta e uma implementação WebSocket mínima e auditável. O servidor pode
+continuar em Rust, onde tamanho é irrelevante. O custo é manter duas
+implementações do protocolo e assumir riscos maiores de segurança de memória no
+componente instalado em redes privadas.
+
+Não se deve implementar TLS. A comparação de tamanho precisa incluir o binário
+e a biblioteca TLS efetivamente distribuídos; um executável C aparentemente
+pequeno que depende de várias bibliotecas dinâmicas não é um cliente menor na
+prática.
+
+## Sessão WebSocket
+
+O cliente abre uma sessão WSS persistente, autentica-se, envia ping
+periodicamente e reconecta com backoff exponencial e jitter. O tráfego da sessão
+usa somente **mensagens WebSocket binárias**.
+
+WebSocket já delimita mensagens, então não é necessário duplicar um campo de
+tamanho externo. Cada mensagem começa com:
+
+```text
++---------+------+-----------+------------------+
+| version | type | stream_id | payload          |
+| 1 byte  | 1 B  | 4 B (BE)  | restante da msg |
++---------+------+-----------+------------------+
+```
+
+Tipos mínimos:
+
+1. `AUTH`: token, versão e identificador do cliente;
+2. `AUTH_OK` ou `ERROR`;
+3. `OPEN`: solicita conexão a um destino local autorizado;
+4. `OPEN_OK` ou `OPEN_ERROR`;
+5. `DATA`: bytes associados ao `stream_id`;
+6. `WINDOW_UPDATE`: backpressure por stream;
+7. `CLOSE`: half-close ou encerramento do stream;
+8. `PING` e `PONG`: heartbeat da aplicação, além do ping WebSocket quando
+   necessário.
+
+Uma única sessão multiplexa todas as conexões. Isso é simples, mas todos os
+streams compartilham a mesma conexão TCP e sofrem head-of-line blocking quando
+há perda. Para o MVP essa troca é aceitável; se medições mostrarem problema, o
+cliente poderá abrir um pequeno pool de WebSockets, distribuindo streams entre
+eles sem mudar o protocolo.
+
+## Autenticação
+
+O agente envia o token no primeiro frame `AUTH`, nunca na URL. Colocar o token
+na query string facilita vazamento em access logs, históricos e métricas. O
+upgrade WebSocket só é considerado autenticado depois da resposta `AUTH_OK`.
+
+Tokens devem ser aleatórios, individuais por cliente, revogáveis e armazenados
+no servidor apenas como hash. O cliente lê o segredo de arquivo protegido ou de
+variável de ambiente; argumento de linha de comando é permitido apenas como
+atalho explícito, pois pode aparecer na lista de processos e no histórico do
+shell.
+
+## Configuração
+
+O servidor é a fonte de verdade das rotas. O cliente possui uma segunda
+allowlist de destinos, evitando que uma configuração ou credencial comprometida
+transforme a máquina privada em proxy aberto.
+
+`server.yaml`:
+
+```yaml
+listen: ":443"
+tunnel_path: "/_cfp/connect"
+
+clients:
+  casa:
+    token_hash: "argon2id:..."
+
+routes:
+  - name: rdp-casa
+    client: casa
+    mode: tcp
+    listen: ":33890"
+    target: "127.0.0.1:3389"
+
+  - name: app-casa
+    client: casa
+    mode: http
+    hostname: "app.exemplo.com"
+    target: "127.0.0.1:3000"
+```
+
+`client.yaml`:
+
+```yaml
+server: "wss://tunnel.exemplo.com/_cfp/connect"
+token_file: "/etc/cfp/token"
+allowed_targets:
+  - "127.0.0.1:3389"
+  - "127.0.0.1:3000"
+```
+
+O servidor não envia um endereço arbitrário no `OPEN`: envia um identificador
+de rota conhecido pelos dois lados ou um destino que o cliente valida contra a
+allowlist exata.
+
+## Encaminhamento
+
+### Portas TCP
+
+Para cada conexão em uma porta pública, o servidor aloca um `stream_id` e envia
+`OPEN`. O cliente conecta ao serviço local e ambos passam a trocar `DATA`, com
+janela limitada, timeouts e half-close. Isso atende SSH, bancos e protocolos TCP
+genéricos.
+
+### Domínios HTTP/HTTPS
+
+No MVP, o servidor termina TLS, escolhe a rota pelo `Host` e encaminha HTTP pelo
+túnel. Assim ele pode servir vários domínios no mesmo `:443`, automatizar
+certificados e adicionar `X-Forwarded-For` de forma controlada.
+
+TLS passthrough por SNI pode vir depois. Nesse modo, o servidor inspeciona o
+ClientHello somente para escolher a rota e encaminha os bytes intactos; o
+serviço privado fica responsável pelo certificado. Não há roteamento por path,
+alteração de headers ou fallback confiável para clientes sem SNI.
+
+## Controles obrigatórios
+
+- validar `Origin`, `Host`, path e método do upgrade WebSocket;
+- limitar tamanho de mensagem, streams, janela, fila, bytes e taxa por cliente;
+- impor timeouts de upgrade, autenticação, conexão local, escrita e ociosidade;
+- rejeitar frames WebSocket de texto e mensagens de protocolo malformadas;
+- usar TLS moderno, verificar certificado e nome no cliente e nunca oferecer
+  modo `--insecure` silencioso;
+- não registrar token, query string sensível nem conteúdo encaminhado;
+- permitir rotação e revogação de credenciais sem reiniciar o servidor;
+- executar sem root e conceder acesso a portas privilegiadas somente ao
+  listener frontal;
+- expor métricas de sessões, reconexões, streams, bytes, filas e erros;
+- realizar shutdown gracioso e validar toda a configuração antes de aplicá-la.
+
+## Escopo do MVP
+
+1. workspace Rust com `cfp-client`, `cfp-server` e crate de protocolo;
+2. WSS, autenticação, heartbeat e reconexão;
+3. multiplexação com backpressure e encaminhamento TCP;
+4. reverse proxy HTTP/HTTPS por hostname;
+5. limites, logs estruturados e métricas básicas;
+6. medição automática do tamanho do cliente em release;
+7. depois: cliente C, pool de WebSockets, hot reload, TLS passthrough e UDP.
+
+```text
+crates/cfp-client/     agente mínimo
+crates/cfp-server/     listener público e roteamento
+crates/cfp-protocol/   tipos e codec sem dependência do runtime do servidor
+```
+
+O orçamento de tamanho deve ser definido antes da implementação, separando
+binário dinâmico, binário estático e pacote comprimido. Sem essa definição,
+“pequeno” não é uma meta testável.
