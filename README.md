@@ -28,6 +28,29 @@ target/release/cfp-server
 target/release/cfp-client
 ```
 
+### Binários pelo GitHub Actions
+
+O workflow `Build release binaries` compila e publica artefatos para:
+
+- Linux AMD64 estático (`x86_64-unknown-linux-musl`);
+- Linux ARM64 estático (`aarch64-unknown-linux-musl`);
+- Linux ARMv7 armhf estático (`armv7-unknown-linux-musleabihf`);
+- Windows x64 (`x86_64-pc-windows-gnu`).
+
+Em pushes e pull requests, os pacotes ficam na seção **Actions → Artifacts** por
+14 dias. Cada pacote inclui `cfp-client`, `cfp-server`, README, configuração de
+exemplo e um arquivo `.sha256` para verificação.
+
+Para criar uma GitHub Release com todos os pacotes:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+Tags começando com `v` publicam automaticamente os `.tar.gz` de Linux, o `.zip`
+de Windows e seus checksums na página de releases.
+
 Se preferir executar os comandos manualmente:
 
 ```bash
