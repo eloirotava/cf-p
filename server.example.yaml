@@ -3,6 +3,12 @@ listen: "127.0.0.1:444"
 # Caddy encaminha os domínios publicados para este roteador HTTP.
 http_listen: "127.0.0.1:445"
 
+# Painel web. Mantenha no loopback e publique-o somente pelo Caddy/HTTPS.
+admin:
+  listen: "127.0.0.1:446"
+  username: "admin"
+  password: "TROQUE_POR_UMA_SENHA_LONGA"
+
 clients:
   # Substitua este hash de 64 caracteres pela saída de generate-token.sh.
   - token_sha256: "0000000000000000000000000000000000000000000000000000000000000000"

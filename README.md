@@ -219,6 +219,45 @@ shell.
 
 ## Configuração
 
+### Painel web e recarga automática
+
+O servidor pode editar o próprio `server.yaml` por uma interface protegida com
+HTTP Basic. Configure credenciais exclusivas e uma porta presa ao loopback:
+
+```yaml
+admin:
+  listen: "127.0.0.1:446"
+  username: "admin"
+  password: "UMA_SENHA_LONGA_E_ALEATORIA"
+```
+
+Para servir o painel e o endpoint do agente no mesmo `a.rotava.com`, o Caddy
+separa upgrades WebSocket das requisições normais:
+
+```caddyfile
+a.rotava.com {
+    @tunnel {
+        header Connection *Upgrade*
+        header Upgrade websocket
+    }
+    reverse_proxy @tunnel 127.0.0.1:444
+    reverse_proxy 127.0.0.1:446
+}
+```
+
+Depois de `caddy validate --config /etc/caddy/Caddyfile` e
+`systemctl reload caddy`, abra `https://a.rotava.com`. O painel permite criar e
+excluir clientes e rotas. Ao criar um cliente, ele gera um token aleatório,
+grava somente seu SHA-256 e mostra uma única vez o comando pronto para executar
+o agente.
+
+Cada alteração é validada, escrita de forma atômica no YAML e aplicada sem
+reiniciar o processo. As sessões existentes são encerradas de propósito; os
+clientes reconectam automaticamente e passam a usar as novas rotas. A senha do
+painel fica no YAML, portanto proteja o arquivo (`chmod 600 server.yaml`) e não
+publique a porta `446` diretamente na internet. Remover todo o bloco `admin`
+desativa a interface.
+
 O servidor é a fonte de verdade das rotas. Neste MVP o token seleciona as rotas
 e destinos definidos na VPS; uma allowlist local no cliente será adicionada
 antes de considerar o agente pronto para ambientes não controlados.
