@@ -206,6 +206,33 @@ O servidor escuta TLS/WSS em `:443`; o cliente não escuta essa porta, apenas
 inicia a conexão de saída até ela. No cliente, os argumentos `--server` e
 `--token` são equivalentes às variáveis de ambiente mostradas.
 
+### Certificado para `a.rotava.com`
+
+Primeiro, crie no DNS um registro `A` para `a.rotava.com` apontando para o IPv4
+da VPS (e um `AAAA` somente se a VPS aceitar IPv6). Para emitir com Let's
+Encrypt, instale o `certbot`, libere temporariamente `80/tcp` e execute:
+
+```bash
+sudo EMAIL=admin@rotava.com \
+  ./scripts/setup-certificate.sh letsencrypt
+```
+
+O script usa `a.rotava.com` como padrão e grava os arquivos em
+`/etc/letsencrypt/live/a.rotava.com/`. É possível trocar o nome com
+`DOMAIN=outro.rotava.com`. Para testar a emissão sem consumir limites, use
+`STAGING=1`.
+
+Para desenvolvimento local, sem DNS público:
+
+```bash
+sudo ./scripts/setup-certificate.sh self-signed
+```
+
+Esse modo grava em `/etc/cfp/tls` por padrão. Um certificado autoassinado não é
+aceito automaticamente pelo cliente: o certificado precisa ser instalado como
+confiável na máquina cliente. Por isso, para a VPS pública, Let's Encrypt é o
+caminho recomendado.
+
 > O MVP implementado encaminha portas TCP. O reverse proxy HTTP por hostname,
 > heartbeat, `WINDOW_UPDATE`, validação de path do WebSocket e hot reload são os
 > próximos passos; ainda não devem ser considerados disponíveis.
