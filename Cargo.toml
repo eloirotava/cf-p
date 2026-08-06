@@ -1,0 +1,31 @@
+[workspace]
+members = ["crates/cfp-client", "crates/cfp-server", "crates/cfp-protocol"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[workspace.dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive", "env"] }
+futures-util = "0.3"
+hex = "0.4"
+rustls = "0.23"
+rustls-pemfile = "2"
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+sha2 = "0.10"
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time", "io-util"] }
+tokio-rustls = "0.26"
+tokio-tungstenite = { version = "0.27", features = ["rustls-tls-webpki-roots"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

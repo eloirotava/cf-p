@@ -162,47 +162,53 @@ shell.
 
 ## Configuração
 
-O servidor é a fonte de verdade das rotas. O cliente possui uma segunda
-allowlist de destinos, evitando que uma configuração ou credencial comprometida
-transforme a máquina privada em proxy aberto.
+O servidor é a fonte de verdade das rotas. Neste MVP o token seleciona as rotas
+e destinos definidos na VPS; uma allowlist local no cliente será adicionada
+antes de considerar o agente pronto para ambientes não controlados.
 
 `server.yaml`:
 
 ```yaml
 listen: ":443"
-tunnel_path: "/_cfp/connect"
+cert: "/etc/letsencrypt/live/tunnel.exemplo.com/fullchain.pem"
+key: "/etc/letsencrypt/live/tunnel.exemplo.com/privkey.pem"
 
 clients:
-  casa:
-    token_hash: "argon2id:..."
-
-routes:
-  - name: rdp-casa
-    client: casa
-    mode: tcp
-    listen: ":33890"
-    target: "127.0.0.1:3389"
-
-  - name: app-casa
-    client: casa
-    mode: http
-    hostname: "app.exemplo.com"
-    target: "127.0.0.1:3000"
+  - token_sha256: "SHA256_HEXADECIMAL_DO_TOKEN"
+    routes:
+      - listen: "0.0.0.0:33890"
+        target: "127.0.0.1:3389"
 ```
 
-`client.yaml`:
+Nesta primeira versão, as rotas pertencem ao hash do token. Assim, tokens
+diferentes ativam conjuntos diferentes de portas. O token em texto puro nunca
+precisa ficar no arquivo da VPS.
 
-```yaml
-server: "wss://tunnel.exemplo.com/_cfp/connect"
-token_file: "/etc/cfp/token"
-allowed_targets:
-  - "127.0.0.1:3389"
-  - "127.0.0.1:3000"
+Para gerar um token e o hash correspondente:
+
+```bash
+TOKEN="$(openssl rand -hex 32)"
+printf '%s' "$TOKEN" | sha256sum
 ```
 
-O servidor não envia um endereço arbitrário no `OPEN`: envia um identificador
-de rota conhecido pelos dois lados ou um destino que o cliente valida contra a
-allowlist exata.
+Execução:
+
+```bash
+cp server.example.yaml server.yaml
+# edite certificado, chave e token_sha256
+cargo build --release
+sudo ./target/release/cfp-server --config server.yaml
+CFP_SERVER=wss://tunnel.exemplo.com CFP_TOKEN="$TOKEN" \
+  ./target/release/cfp-client
+```
+
+O servidor escuta TLS/WSS em `:443`; o cliente não escuta essa porta, apenas
+inicia a conexão de saída até ela. No cliente, os argumentos `--server` e
+`--token` são equivalentes às variáveis de ambiente mostradas.
+
+> O MVP implementado encaminha portas TCP. O reverse proxy HTTP por hostname,
+> heartbeat, `WINDOW_UPDATE`, validação de path do WebSocket e hot reload são os
+> próximos passos; ainda não devem ser considerados disponíveis.
 
 ## Encaminhamento
 
@@ -215,9 +221,10 @@ genéricos.
 
 ### Domínios HTTP/HTTPS
 
-No MVP, o servidor termina TLS, escolhe a rota pelo `Host` e encaminha HTTP pelo
-túnel. Assim ele pode servir vários domínios no mesmo `:443`, automatizar
-certificados e adicionar `X-Forwarded-For` de forma controlada.
+Na próxima etapa, o servidor terminará TLS, escolherá a rota pelo `Host` e
+encaminhará HTTP pelo túnel. Isso permitirá servir vários domínios no mesmo
+`:443`, automatizar certificados e adicionar `X-Forwarded-For` de forma
+controlada. Essa parte ainda não está implementada no MVP atual.
 
 TLS passthrough por SNI pode vir depois. Nesse modo, o servidor inspeciona o
 ClientHello somente para escolher a rota e encaminha os bytes intactos; o
