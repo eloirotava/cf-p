@@ -1,0 +1,14 @@
+# Caddy termina TLS/WSS e encaminha a.rotava.com para esta porta local.
+listen: "127.0.0.1:444"
+# Caddy encaminha os domínios publicados para este roteador HTTP.
+http_listen: "127.0.0.1:445"
+
+clients:
+  # Substitua este hash de 64 caracteres pela saída de generate-token.sh.
+  - token_sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+    routes:
+      - listen: "0.0.0.0:33890"
+        target: "127.0.0.1:3389"
+      # O valor sem porta é interpretado como hostname HTTP.
+      - listen: "b.rotava.com"
+        target: "127.0.0.1:3000"
