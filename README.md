@@ -324,6 +324,47 @@ caminho recomendado.
 > heartbeat, `WINDOW_UPDATE`, validação de path do WebSocket e hot reload são os
 > próximos passos; ainda não devem ser considerados disponíveis.
 
+### Teste ponta a ponta com uma terceira máquina
+
+As mensagens `tunel autenticado` no cliente e `rota ativa` no servidor já
+confirmam WSS, token e abertura de `33890`. Para comprovar que bytes atravessam
+o túnel sem depender de RDP, faça este teste temporário.
+
+Na máquina privada, pare qualquer serviço que já esteja usando `3389` e, em
+outro terminal, suba um servidor HTTP de teste:
+
+```bash
+python3 -m http.server 3389 --bind 127.0.0.1
+```
+
+Mantenha o `cfp-client` conectado. Na terceira máquina, execute:
+
+```bash
+curl -v --max-time 10 http://IP_PUBLICO_DA_VPS:33890/
+```
+
+Uma resposta `HTTP/1.0 200 OK` com a listagem do diretório comprova o caminho
+completo:
+
+```text
+terceira máquina → VPS:33890 → WSS/Caddy:443 → cfp-client → localhost:3389
+```
+
+Também é possível fazer apenas o teste de abertura da porta:
+
+```bash
+nc -vz -w 5 IP_PUBLICO_DA_VPS 33890
+```
+
+Esse teste do `nc` é mais fraco: ele comprova que a VPS aceitou TCP, mas o
+`curl` comprova que requisição e resposta realmente atravessaram o túnel. Ao
+terminar, encerre o `python3` com `Ctrl+C` e volte a iniciar o serviço RDP real.
+
+Os avisos `No "Connection: upgrade" header` indicam que algum navegador,
+monitor ou scanner fez HTTP comum em `a.rotava.com`, sem solicitar WebSocket.
+Eles não significam queda do cliente que continua mostrando `tunel
+autenticado`.
+
 ## Encaminhamento
 
 ### Portas TCP
