@@ -1,6 +1,5 @@
-listen: "0.0.0.0:443"
-cert: "/etc/letsencrypt/live/tunnel.exemplo.com/fullchain.pem"
-key: "/etc/letsencrypt/live/tunnel.exemplo.com/privkey.pem"
+# Caddy termina TLS/WSS e encaminha a.rotava.com para esta porta local.
+listen: "127.0.0.1:444"
 
 clients:
   - token_sha256: "substitua_pelo_sha256_hexadecimal_do_token"

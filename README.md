@@ -208,6 +208,54 @@ inicia a conexão de saída até ela. No cliente, os argumentos `--server` e
 
 ### Certificado para `a.rotava.com`
 
+#### Com Caddy já instalado (recomendado)
+
+Sim: Caddy pode continuar atendendo todos os sites em `:443` e terminar o TLS
+do túnel. Reserve `a.rotava.com` para o agente e adicione ao `Caddyfile`:
+
+```caddyfile
+a.rotava.com {
+    reverse_proxy 127.0.0.1:444
+}
+```
+
+Caddy encaminha o upgrade WebSocket automaticamente. Nesse cenário,
+`cfp-server` recebe WebSocket sem TLS **somente no loopback**:
+
+```yaml
+listen: "127.0.0.1:444"
+
+clients:
+  - token_sha256: "SHA256_HEXADECIMAL_DO_TOKEN"
+    routes:
+      - listen: "0.0.0.0:33890"
+        target: "127.0.0.1:3389"
+```
+
+O cliente continua usando
+`CFP_SERVER=wss://a.rotava.com CFP_TOKEN="$TOKEN"`: externamente tudo passa por
+TLS/443; apenas o trecho local Caddy → `cfp-server` usa `ws://127.0.0.1:444`.
+Não publique a porta `444` em `0.0.0.0` nem no firewall.
+
+Outros blocos do Caddy continuam servindo normalmente seus próprios domínios:
+
+```caddyfile
+rotava.com {
+    reverse_proxy 127.0.0.1:8080
+}
+
+a.rotava.com {
+    reverse_proxy 127.0.0.1:444
+}
+```
+
+Isso permite usar sites e o túnel simultaneamente no mesmo IP e na mesma porta
+pública `443`, porque Caddy seleciona o upstream pelo hostname TLS/HTTP. O
+encaminhamento público `33890 → cliente:3389` permanece separado e continua
+funcionando.
+
+#### Sem Caddy
+
 Primeiro, crie no DNS um registro `A` para `a.rotava.com` apontando para o IPv4
 da VPS (e um `AAAA` somente se a VPS aceitar IPv6). Para emitir com Let's
 Encrypt, instale o `certbot`, libere temporariamente `80/tcp` e execute:

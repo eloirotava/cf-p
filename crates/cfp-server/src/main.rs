@@ -42,8 +42,8 @@ struct Client {
 #[derive(Deserialize)]
 struct Config {
     listen: String,
-    cert: String,
-    key: String,
+    cert: Option<String>,
+    key: Option<String>,
     clients: Vec<Client>,
 }
 type Streams = Arc<Mutex<HashMap<u32, mpsc::Sender<Vec<u8>>>>>;
@@ -52,21 +52,36 @@ type Streams = Arc<Mutex<HashMap<u32, mpsc::Sender<Vec<u8>>>>>;
 async fn main() -> Result<()> {
     tracing_subscriber::fmt().with_env_filter("info").init();
     let cfg: Config = serde_yaml::from_reader(File::open(Args::parse().config)?)?;
-    let acceptor = TlsAcceptor::from(Arc::new(tls_config(&cfg.cert, &cfg.key)?));
+    let acceptor = match (&cfg.cert, &cfg.key) {
+        (Some(cert), Some(key)) => Some(TlsAcceptor::from(Arc::new(tls_config(cert, key)?))),
+        (None, None) => None,
+        _ => anyhow::bail!("cert e key devem ser configurados juntos"),
+    };
     let listener = TcpListener::bind(&cfg.listen).await?;
-    info!(listen = %cfg.listen, "servidor iniciado");
+    info!(listen = %cfg.listen, tls = acceptor.is_some(), "servidor iniciado");
     let clients = Arc::new(cfg.clients);
     loop {
         let (tcp, peer) = listener.accept().await?;
         let acceptor = acceptor.clone();
         let clients = clients.clone();
         tokio::spawn(async move {
-            let result = async {
-                let tls = acceptor.accept(tcp).await?;
-                let ws = accept_async(tls).await?;
-                serve(ws, clients).await
-            }
-            .await;
+            let result = match acceptor {
+                Some(acceptor) => {
+                    async {
+                        let tls = acceptor.accept(tcp).await?;
+                        let ws = accept_async(tls).await?;
+                        serve(ws, clients).await
+                    }
+                    .await
+                }
+                None => {
+                    async {
+                        let ws = accept_async(tcp).await?;
+                        serve(ws, clients).await
+                    }
+                    .await
+                }
+            };
             if let Err(error) = result {
                 warn!(%peer, %error, "sessao encerrada");
             }
