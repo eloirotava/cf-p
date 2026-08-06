@@ -227,6 +227,7 @@ HTTP Basic. Configure credenciais exclusivas e uma porta presa ao loopback:
 ```yaml
 admin:
   listen: "127.0.0.1:446"
+  public_url: "wss://a.rotava.com"
   username: "admin"
   password: "UMA_SENHA_LONGA_E_ALEATORIA"
 ```
@@ -248,8 +249,9 @@ a.rotava.com {
 Depois de `caddy validate --config /etc/caddy/Caddyfile` e
 `systemctl reload caddy`, abra `https://a.rotava.com`. O painel permite criar e
 excluir clientes e rotas. Ao criar um cliente, ele gera um token aleatório,
-grava somente seu SHA-256 e mostra uma única vez o comando pronto para executar
-o agente.
+grava somente seu SHA-256 e mostra uma única vez comandos prontos para Linux,
+macOS, Windows PowerShell e Windows CMD. O valor de `public_url` é usado nesses
+comandos e deve ser o endereço WSS público do agente.
 
 Cada alteração é validada, escrita de forma atômica no YAML e aplicada sem
 reiniciar o processo. As sessões existentes são encerradas de propósito; os
@@ -257,6 +259,23 @@ clientes reconectam automaticamente e passam a usar as novas rotas. A senha do
 painel fica no YAML, portanto proteja o arquivo (`chmod 600 server.yaml`) e não
 publique a porta `446` diretamente na internet. Remover todo o bloco `admin`
 desativa a interface.
+
+O túnel não transforma automaticamente qualquer porta da rede privada em uma
+porta pública. Ele encaminha somente as rotas TCP cadastradas para aquele token,
+e o processo cliente ainda precisa ter permissão e conectividade até o `target`.
+UDP não é suportado. Como o cliente atualmente confia nos destinos enviados
+pelo servidor, comprometer a VPS ou o painel pode dar acesso TCP com os mesmos
+privilégios de rede do processo cliente. Execute-o com usuário restrito e
+proteja rigorosamente a administração; uma allowlist local no agente continua
+planejada antes de uso em redes não controladas.
+
+WSS em `443/tcp` costuma atravessar NAT porque é uma conexão iniciada de dentro
+para fora, mas não é impossível de bloquear. Uma rede pode negar o domínio ou
+IP da VPS, filtrar DNS/SNI, permitir saída apenas por proxy autenticado, rejeitar
+o upgrade WebSocket, limitar conexões longas ou usar inspeção TLS em dispositivos
+administrados. Portanto, o projeto oferece transporte web compatível; não é uma
+garantia de contornar firewalls nem deve ser usado para contrariar políticas da
+rede.
 
 O servidor é a fonte de verdade das rotas. Neste MVP o token seleciona as rotas
 e destinos definidos na VPS; uma allowlist local no cliente será adicionada

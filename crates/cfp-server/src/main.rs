@@ -56,6 +56,8 @@ struct Config {
 struct AdminConfig {
     #[serde(default = "default_admin_listen")]
     listen: String,
+    #[serde(default = "default_public_url")]
+    public_url: String,
     username: String,
     password: String,
 }
@@ -75,6 +77,9 @@ fn default_http_listen() -> String {
 }
 fn default_admin_listen() -> String {
     "127.0.0.1:446".into()
+}
+fn default_public_url() -> String {
+    "wss://a.rotava.com".into()
 }
 
 #[tokio::main]
@@ -627,7 +632,12 @@ fn render_admin(cfg: &Config, token: Option<&str>) -> String {
         }
         cards.push_str(&format!("<form method=post action=/routes><input type=hidden name=client value={ci}><input name=listen required placeholder='b.rotava.com ou 0.0.0.0:33890'><input name=target required placeholder='127.0.0.1:3000'><button>Adicionar rota</button></form></section>"));
     }
-    let notice = token.map(|t| format!("<aside><strong>Copie agora; o token não será mostrado novamente.</strong><code>{}</code><pre>CFP_SERVER=wss://a.rotava.com CFP_TOKEN=\"{}\" ./cfp-client</pre></aside>", escape(t), escape(t))).unwrap_or_default();
+    let server = cfg
+        .admin
+        .as_ref()
+        .map(|admin| admin.public_url.as_str())
+        .unwrap_or("wss://a.rotava.com");
+    let notice = token.map(|t| format!("<aside><strong>Copie agora; o token não será mostrado novamente.</strong><code>{}</code><h3>Linux / macOS</h3><pre>CFP_SERVER=\"{}\" CFP_TOKEN=\"{}\" ./cfp-client</pre><h3>Windows PowerShell</h3><pre>$env:CFP_SERVER=\"{}\"; $env:CFP_TOKEN=\"{}\"; .\\cfp-client.exe</pre><h3>Windows CMD</h3><pre>set \"CFP_SERVER={}\" &amp;&amp; set \"CFP_TOKEN={}\" &amp;&amp; cfp-client.exe</pre></aside>", escape(t), escape(server), escape(t), escape(server), escape(t), escape(server), escape(t))).unwrap_or_default();
     format!(
         r#"<!doctype html><html lang=pt-br><meta charset=utf-8><meta name=viewport content="width=device-width"><title>cf-p</title><style>body{{font:16px system-ui;max-width:900px;margin:40px auto;padding:0 16px;background:#10131a;color:#e8edf5}}h1{{color:#77d5ff}}section,aside{{background:#1b2130;padding:20px;margin:18px 0;border-radius:12px}}code,pre{{background:#090b10;padding:5px;border-radius:5px;overflow:auto}}aside code{{display:block;margin:14px 0}}form{{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}}input{{flex:1;min-width:220px;padding:10px}}button{{padding:10px;background:#168aad;color:white;border:0;border-radius:6px}}.danger{{background:#9b2c2c}}.route{{display:flex;align-items:center;gap:8px;flex-wrap:wrap;border-top:1px solid #343b4b}}</style><h1>cf-p</h1><p>Configuração ativa. Alterações são salvas no YAML e os clientes reconectam automaticamente.</p>{notice}<form method=post action=/clients><button>Novo cliente + token</button></form>{cards}</html>"#
     )
@@ -680,6 +690,9 @@ fn validate_config(config: &Config) -> Result<()> {
     if let Some(admin) = &config.admin {
         if admin.username.trim().is_empty() || admin.password.len() < 12 {
             anyhow::bail!("admin exige username e password com pelo menos 12 caracteres");
+        }
+        if !admin.public_url.starts_with("wss://") {
+            anyhow::bail!("admin.public_url deve comecar com wss://");
         }
     }
     let mut tokens = HashSet::new();

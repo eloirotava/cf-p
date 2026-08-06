@@ -6,6 +6,7 @@ http_listen: "127.0.0.1:445"
 # Painel web. Mantenha no loopback e publique-o somente pelo Caddy/HTTPS.
 admin:
   listen: "127.0.0.1:446"
+  public_url: "wss://a.rotava.com"
   username: "admin"
   password: "TROQUE_POR_UMA_SENHA_LONGA"
 
