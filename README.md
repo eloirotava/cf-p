@@ -419,6 +419,23 @@ mesmo diretório e compare:
 Get-Content .\cfp-windows-amd64.zip.sha256
 ```
 
+Se aparecer somente `falha ao conectar WSS`, verifique primeiro DNS e TCP no
+mesmo CMD/PowerShell:
+
+```powershell
+Resolve-DnsName a.rotava.com
+Test-NetConnection a.rotava.com -Port 443
+curl.exe -v https://a.rotava.com/
+```
+
+`TcpTestSucceeded: False` indica bloqueio de rede, DNS/IP incorreto ou Caddy
+inacessível. Se TCP e HTTPS funcionarem, atualize para a release mais recente: o
+cliente agora imprime a cadeia completa do erro, diferenciando resolução DNS,
+conexão recusada, certificado TLS e resposta inválida ao upgrade WebSocket.
+
+Nunca publique tokens reais em logs, chats ou issues. Se isso acontecer, gere um
+novo token, substitua o hash no servidor e descarte imediatamente o anterior.
+
 ### Certificado para `a.rotava.com`
 
 #### Com Caddy já instalado (recomendado)

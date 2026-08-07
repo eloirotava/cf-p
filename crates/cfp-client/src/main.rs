@@ -29,7 +29,10 @@ async fn main() -> Result<()> {
     let mut delay = 1;
     loop {
         if let Err(error) = run(&args).await {
-            warn!(%error, "tunel desconectado");
+            // `{error:#}` inclui toda a cadeia de causas do anyhow. Sem isso,
+            // erros de DNS, TCP, TLS e handshake apareciam apenas como
+            // "falha ao conectar WSS", dificultando diagnóstico no Windows.
+            warn!(error = %format!("{error:#}"), "tunel desconectado");
         }
         tokio::time::sleep(Duration::from_secs(delay)).await;
         delay = (delay * 2).min(30);
