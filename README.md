@@ -22,8 +22,9 @@ O mapa recomendado compartilha `443/tcp` entre Caddy, painel e WSS, e reserva o
 mesmo número `4443` para Noise em TCP e QUIC em UDP; veja a seção de portas no
 documento do transporte mínimo.
 
-> **Critério prático:** um agente ARMHF funcional de aproximadamente 1,9 MB já é
-> pequeno para a maioria dos ambientes. O cliente C/Noise só deve ser priorizado
+> **Critério prático:** o cliente ARMHF próprio em Rust, com aproximadamente 1,9
+> MB, já é pequeno para a maioria dos ambientes; ele não é o `cloudflared`
+> oficial em Go. O cliente C/Noise só deve ser priorizado
 > quando medições de flash, distribuição ou memória demonstrarem um limite real;
 > caso contrário, segurança, confiabilidade e operação do WSS têm prioridade.
 

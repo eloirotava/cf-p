@@ -83,9 +83,12 @@ medição do cliente completo poderá confirmar isso por arquitetura.
 
 ## Quando não construir este cliente
 
-Um agente ARMHF funcional com cerca de 1,9 MB já é pequeno para quase toda VPS,
-SBC, roteador Linux ou cartão SD. Trocar 1,9 MB por 100–250 KiB economiza menos de
-2 MB de armazenamento, mas cria outro transporte criptográfico, implementação C,
+O número de referência de 1,9 MB vem de um cliente ARMHF próprio, escrito em Rust
+para conversar com a infraestrutura da Cloudflare; não é o `cloudflared` oficial
+em Go, que pertence a outra implementação e tem outro orçamento de tamanho. Um
+agente próprio e funcional nessa faixa já é pequeno para quase toda VPS, SBC,
+roteador Linux ou cartão SD. Trocar 1,9 MB por 100–250 KiB economiza menos de 2 MB
+de armazenamento, mas cria outro transporte criptográfico, implementação C,
 matriz de builds, atualizações e responsabilidade de segurança.
 
 O cliente C/Noise só deve avançar se houver um requisito mensurável, por exemplo:
@@ -95,6 +98,11 @@ O cliente C/Noise só deve avançar se houver um requisito mensurável, por exem
 - flash realmente limitada;
 - plataforma sem Rust e sem bibliotecas dinâmicas adequadas;
 - tempo de inicialização ou memória medidos e incompatíveis com o agente atual.
+
+Por ser código próprio, a comparação correta não é apenas “1,9 MB contra mais de
+30 MB”: também é preciso comparar cobertura de protocolo, reconexão, atualização,
+testes e segurança com o cliente oficial. O binário menor pode deliberadamente
+implementar um subconjunto, o que é uma vantagem válida desde que documentada.
 
 Tamanho do arquivo isolado não basta. Antes da decisão, medir em ARMHF: RSS após
 autenticação, pico de RAM com streams, CPU em repouso, tempo de conexão, tamanho
