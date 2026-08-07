@@ -9,6 +9,9 @@ Um segundo cliente mínimo em C está especificado em
 [`docs/c-client.md`](docs/c-client.md). O documento separa corretamente um
 executável pequeno com bibliotecas dinâmicas de um pacote realmente estático e
 autossuficiente, e inclui um script para medir o piso de tamanho TLS no host.
+O perfil criptográfico sem TLS/WSS proposto usa Noise sobre TCP, chave pública
+fixada e PSK individual; veja
+[`docs/minimal-secure-transport.md`](docs/minimal-secure-transport.md).
 
 ## Instalação rápida na VPS
 

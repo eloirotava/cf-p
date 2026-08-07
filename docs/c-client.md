@@ -69,3 +69,8 @@ dinâmicas (`readelf -d`) e tamanho total do pacote estático.
 Use `scripts/measure-c-tls-floor.sh` para medir no host a diferença entre um
 executável C mínimo ligado dinamicamente e estaticamente à biblioteca TLS. Essa
 medição ainda é um piso: não contém handshake, WebSocket nem multiplexação.
+
+Para um perfil ainda menor sem X.509, TLS ou WebSocket, a recomendação é um
+transporte Noise/TCP com chave do servidor fixada e PSK por cliente. O desenho e
+seus requisitos de segurança estão em
+[`minimal-secure-transport.md`](minimal-secure-transport.md).
