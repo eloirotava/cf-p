@@ -380,6 +380,45 @@ O servidor escuta TLS/WSS em `:443`; o cliente não escuta essa porta, apenas
 inicia a conexão de saída até ela. No cliente, os argumentos `--server` e
 `--token` são equivalentes às variáveis de ambiente mostradas.
 
+### Cliente no Windows pela linha de comando
+
+Baixe `cfp-windows-amd64.zip` na GitHub Release, extraia `cfp-client.exe` e abra
+PowerShell ou CMD no diretório extraído. Não é necessário instalar o Rust.
+
+PowerShell, em uma única linha:
+
+```powershell
+$env:CFP_SERVER="wss://a.rotava.com"; $env:CFP_TOKEN="TOKEN_ORIGINAL"; .\cfp-client.exe
+```
+
+CMD, em uma única linha:
+
+```cmd
+set "CFP_SERVER=wss://a.rotava.com" && set "CFP_TOKEN=TOKEN_ORIGINAL" && cfp-client.exe
+```
+
+Também é possível passar argumentos diretamente:
+
+```powershell
+.\cfp-client.exe --server "wss://a.rotava.com" --token "TOKEN_ORIGINAL"
+```
+
+Variáveis de ambiente são preferíveis porque argumentos podem aparecer em
+ferramentas que listam a linha de comando dos processos. Use o token original
+mostrado uma vez pelo painel, não o `token_sha256` armazenado no servidor.
+
+Enquanto aparecer `tunel autenticado`, mantenha a janela aberta. `Ctrl+C` encerra
+o agente. O certificado de `a.rotava.com` precisa ser válido para o Windows; o
+cliente não possui modo para ignorar erros TLS.
+
+Para conferir o pacote antes de extrair, coloque o `.zip` e seu `.sha256` no
+mesmo diretório e compare:
+
+```powershell
+(Get-FileHash .\cfp-windows-amd64.zip -Algorithm SHA256).Hash.ToLower()
+Get-Content .\cfp-windows-amd64.zip.sha256
+```
+
 ### Certificado para `a.rotava.com`
 
 #### Com Caddy já instalado (recomendado)
