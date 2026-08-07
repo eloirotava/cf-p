@@ -105,7 +105,7 @@ async fn main() -> Result<()> {
             admin,
             config_path,
             clients.clone(),
-            reload_tx,
+            reload_tx.clone(),
         ));
     }
     let domains: DomainRoutes = Default::default();
