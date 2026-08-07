@@ -433,6 +433,24 @@ inacessível. Se TCP e HTTPS funcionarem, atualize para a release mais recente: 
 cliente agora imprime a cadeia completa do erro, diferenciando resolução DNS,
 conexão recusada, certificado TLS e resposta inválida ao upgrade WebSocket.
 
+Se o erro for `UnknownIssuer` apenas na rede da empresa, ela provavelmente usa
+inspeção TLS com uma CA corporativa. As builds novas mantêm as raízes públicas e
+também carregam o trust store nativo do sistema; no Windows, uma CA corporativa
+instalada corretamente em **Trusted Root Certification Authorities** passa a ser
+aceita. Gere uma nova release e substitua o executável antigo.
+
+Confirme a cadeia apresentada pela rede antes de confiar nela:
+
+```powershell
+curl.exe -v https://a.rotava.com/
+certutil -store Root
+```
+
+Se a CA não estiver instalada, solicite o certificado raiz e as instruções ao TI.
+Não adicione opção para ignorar certificados, não use `curl -k` como solução e
+não importe certificados obtidos de fontes não verificadas. Fora da rede
+corporativa, o cliente continua aceitando a cadeia pública normal do Caddy.
+
 Nunca publique tokens reais em logs, chats ou issues. Se isso acontecer, gere um
 novo token, substitua o hash no servidor e descarte imediatamente o anterior.
 
