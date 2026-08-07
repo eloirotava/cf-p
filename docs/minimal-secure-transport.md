@@ -141,6 +141,33 @@ O CI deve executar:
 O modo Noise não substitui WSS. Ele é uma opção explícita para ambientes em que
 o operador controla o firewall e prioriza tamanho do agente.
 
+## Mapa de portas recomendado
+
+Não é necessário gastar uma porta pública distinta para cada componente. Com
+Caddy, o desenho inicial pode ser:
+
+| Endereço | Protocolo | Processo/uso | Exposição |
+|---|---|---|---|
+| `:443` | TCP | Caddy: HTTPS do painel, sites e upgrade WSS | pública |
+| `127.0.0.1:444` | TCP | endpoint WebSocket do `cfp-server` | loopback |
+| `127.0.0.1:445` | TCP | roteador HTTP por hostname | loopback |
+| `127.0.0.1:446` | TCP | painel administrativo | loopback |
+| `:4443` | TCP | listener Noise do cliente mínimo | pública |
+| `:4443` | UDP | listener QUIC experimental | pública |
+
+TCP/4443 e UDP/4443 podem coexistir porque são sockets de protocolos diferentes.
+Da mesma forma, QUIC poderia usar UDP/443 enquanto o Caddy usa TCP/443, mas não
+se o Caddy também estiver usando UDP/443 para HTTP/3. Usar UDP/4443 primeiro
+evita esse conflito.
+
+O cliente mínimo deve começar apenas com Noise/TCP. Criar “Noise sobre UDP”
+exigiria implementar perda, reordenação, retransmissão, congestion control e
+multiplexação, repetindo parte do trabalho de QUIC. Para UDP, use o transporte
+QUIC; para o menor agente, use Noise/TCP.
+
+As portas publicadas pelas rotas (`33890/tcp`, `5353/udp` etc.) continuam sendo
+adicionais e independentes das portas usadas pelos agentes para formar o túnel.
+
 ## Meta de tamanho
 
 `100 KiB` é uma meta agressiva, não uma estimativa garantida. Antes de existir o

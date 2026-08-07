@@ -18,6 +18,9 @@ usar WireGuard estão documentados no mesmo arquivo.
 O perfil mínimo pode ser provisionado com um único `CFP_TOKEN=CFPM1...`, que
 encapsula a identidade pública do servidor e a PSK do cliente sem confundir os
 dois papéis criptográficos.
+O mapa recomendado compartilha `443/tcp` entre Caddy, painel e WSS, e reserva o
+mesmo número `4443` para Noise em TCP e QUIC em UDP; veja a seção de portas no
+documento do transporte mínimo.
 
 ## Instalação rápida na VPS
 
