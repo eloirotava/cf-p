@@ -60,26 +60,22 @@ O workflow `Build release binaries` compila e publica artefatos para:
 - Linux ARMv7 armhf estático (`armv7-unknown-linux-musleabihf`);
 - Windows x64 (`x86_64-pc-windows-gnu`).
 
-Em pushes e pull requests, os pacotes ficam na seção **Actions → Artifacts** por
-14 dias. Cada pacote inclui `cfp-client`, `cfp-server`, README, configuração de
-exemplo e um arquivo `.sha256` para verificação.
-
-Para criar uma GitHub Release com todos os pacotes:
-
-```bash
-git tag v0.1.0
-git push origin v0.1.0
-```
-
-Tags começando com `v` publicam automaticamente os `.tar.gz` de Linux, o `.zip`
-de Windows e seus checksums na página de releases.
-
-Também é possível publicar tudo pelo botão: abra **Actions → Build release
-binaries → Run workflow**, preencha `version` com `v0.2.0` (ou `0.2.0`) e
+O workflow roda **somente pelo gatilho manual**: não há build automático em push,
+pull request ou tag. Para publicar uma versão, abra **Actions → Build release
+binaries → Run workflow**, preencha `version` com `v0.0.1` (ou `0.0.1`) e
 confirme. O workflow valida a versão, compila todas as arquiteturas, cria a tag e
-a GitHub Release e envia automaticamente os arquivos e checksums. Use uma versão
-nova em cada execução; uma release existente com a mesma tag será atualizada em
-vez de representar uma versão diferente.
+a GitHub Release e envia automaticamente os arquivos e checksums.
+
+Cada pacote inclui `cfp-client`, `cfp-server`, README, configuração de exemplo e
+um arquivo `.sha256` para verificação. Os artefatos também ficam em
+**Actions → Artifacts** por 14 dias.
+
+Use uma versão nova em cada execução; uma release existente com a mesma tag será
+atualizada em vez de representar uma versão diferente.
+
+A compilação usa `--locked`, portanto o `Cargo.lock` versionado determina as
+versões exatas das dependências. Assim a mesma tag reproduz o mesmo binário, em
+vez de resolver dependências novas a cada execução.
 
 Se preferir executar os comandos manualmente:
 
@@ -715,12 +711,15 @@ alteração de headers ou fallback confiável para clientes sem SNI.
 
 ## Estado do MVP
 
-Já implementado: workspace Rust, WSS, autenticação, reconexão, multiplexação e
-encaminhamento TCP. Domínios funcionam com Caddy e uma rota TCP local por
-upstream, como descrito acima.
+Já implementado: workspace Rust, WSS, autenticação, reconexão, multiplexação,
+encaminhamento TCP, encaminhamento UDP, roteamento HTTP por hostname e painel de
+administração com recarga automática do `server.yaml`.
 
-Próximos passos: heartbeat, controle de fluxo explícito, limites, métricas,
-roteamento HTTP nativo por hostname, hot reload, TLS passthrough e UDP.
+Próximos passos: heartbeat (`PING`/`PONG`), controle de fluxo explícito
+(`WINDOW_UPDATE`), limites por cliente, métricas, TLS passthrough por SNI e
+allowlist local no agente. Esses tipos de frame aparecem na seção de protocolo
+como desenho pretendido; o codec atual implementa somente `AUTH`, `AUTH_OK`,
+`OPEN`, `OPEN_OK`, `OPEN_ERROR`, `DATA`, `CLOSE` e `ERROR`.
 
 ```text
 crates/cfp-client/     agente mínimo
