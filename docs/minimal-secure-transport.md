@@ -141,6 +141,31 @@ O CI deve executar:
 O modo Noise não substitui WSS. Ele é uma opção explícita para ambientes em que
 o operador controla o firewall e prioriza tamanho do agente.
 
+## Meta de tamanho
+
+`100 KiB` é uma meta agressiva, não uma estimativa garantida. Antes de existir o
+cliente C completo, o orçamento honesto para um Linux estático e stripado é:
+
+| Componente | Orçamento inicial |
+|---|---:|
+| primitivas criptográficas | 35–90 KiB |
+| estado Noise e records | 8–25 KiB |
+| sockets, protocolo e `poll` | 10–35 KiB |
+| startup, libc mínima e auxiliares | 20–100 KiB |
+| **faixa total de engenharia** | **73–250 KiB** |
+
+Esses valores são metas de engenharia, não medições do artefato final. LTO,
+`-Os`, `--gc-sections`, uma biblioteca criptográfica configurada e a ausência de
+DNS podem aproximar o binário de 100 KiB. Resolver hostnames, suportar IPv6,
+embutir libc completa, mensagens de erro, UDP ou mais plataformas aumenta o
+tamanho. Um build dinâmico pode produzir um arquivo menor sem reduzir o tamanho
+real das bibliotecas exigidas na máquina.
+
+A primeira meta de aceitação deve ser **menos de 256 KiB estático**, mantendo
+todas as verificações. Depois se mede e otimiza para 128 KiB; `100 KiB` só vira
+promessa quando CI publicar o tamanho real por arquitetura. Não se deve remover
+autenticação, RNG seguro, checagem de tags ou limites para atingir um número.
+
 ## Relação com WireGuard
 
 Sim, a construção é deliberadamente parecida: WireGuard também usa um handshake

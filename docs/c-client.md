@@ -77,3 +77,6 @@ seus requisitos de segurança estão em
 Para manter a mesma experiência dos outros clientes, a chave pública e a PSK
 podem vir empacotadas em uma única credencial `CFPM1...`; o agente as separa
 internamente, sem pedir duas chaves ao operador.
+O orçamento inicial do perfil Noise estático é de 73–250 KiB, com meta de
+aceitação abaixo de 256 KiB. Aproximar-se de 100 KiB é plausível, porém somente a
+medição do cliente completo poderá confirmar isso por arquitetura.
