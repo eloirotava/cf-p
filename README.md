@@ -15,6 +15,9 @@ fixada e PSK individual; veja
 O desenho é aparentado ao handshake do WireGuard, mas mantém encaminhamento de
 aplicação em vez de criar uma VPN/IP; a comparação e o critério para simplesmente
 usar WireGuard estão documentados no mesmo arquivo.
+O perfil mínimo pode ser provisionado com um único `CFP_TOKEN=CFPM1...`, que
+encapsula a identidade pública do servidor e a PSK do cliente sem confundir os
+dois papéis criptográficos.
 
 ## Instalação rápida na VPS
 

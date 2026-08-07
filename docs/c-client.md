@@ -74,3 +74,6 @@ Para um perfil ainda menor sem X.509, TLS ou WebSocket, a recomendação é um
 transporte Noise/TCP com chave do servidor fixada e PSK por cliente. O desenho e
 seus requisitos de segurança estão em
 [`minimal-secure-transport.md`](minimal-secure-transport.md).
+Para manter a mesma experiência dos outros clientes, a chave pública e a PSK
+podem vir empacotadas em uma única credencial `CFPM1...`; o agente as separa
+internamente, sem pedir duas chaves ao operador.

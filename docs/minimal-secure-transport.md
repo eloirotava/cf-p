@@ -63,14 +63,55 @@ deve mostrar ao criar o cliente:
 
 ```text
 CFP_SERVER=tcp://a.rotava.com:4443
-CFP_SERVER_KEY=<chave-publica-fixada>
-CFP_TOKEN=<psk-individual-de-32-bytes>
+CFP_TOKEN=CFPM1.<credencial-de-provisionamento>
 ```
 
-O cliente deve recusar conexão se a chave apresentada não for exatamente a
-fixada. Rotação exige aceitar temporariamente chave antiga e nova ou reprovisionar
-os clientes. Usar apenas a PSK sem fixar a identidade do servidor aumenta o dano
-de vazamento do token e não é o desenho recomendado.
+Essa credencial contém a chave pública fixada e a PSK descritas abaixo. O cliente
+deve recusar conexão se a chave apresentada não for exatamente a fixada. Rotação
+exige aceitar temporariamente chave antiga e nova ou reprovisionar os clientes.
+Usar apenas a PSK sem fixar a identidade do servidor aumenta o dano de vazamento
+do token e não é o desenho recomendado.
+
+### Uma única credencial para o usuário
+
+A interface não precisa pedir duas variáveis. O painel pode empacotar tudo em um
+único token de provisionamento Base64URL:
+
+```text
+CFPM1.<base64url(version || client_id || server_public_key || client_psk)>
+```
+
+Layout inicial:
+
+| Campo | Tamanho | Secreto? |
+|---|---:|---|
+| version | 1 byte | não |
+| client_id | 16 bytes | não |
+| server_public_key | 32 bytes | não |
+| client_psk | 32 bytes | sim |
+
+O cliente recebe somente:
+
+```text
+CFP_SERVER=tcp://a.rotava.com:4443
+CFP_TOKEN=CFPM1....
+```
+
+Internamente ele decodifica o token, usa `server_public_key` para autenticar a
+VPS e `client_psk` no handshake. O `client_id` pode ser enviado antes do
+handshake para o servidor localizar a PSK correta sem testar o segredo de todos
+os clientes; ele é um identificador aleatório, não uma identidade pessoal.
+
+Não se deve cortar uma única chave secreta ao meio nem derivar a chave privada do
+servidor a partir do token. Se o mesmo segredo permitisse calcular os dois lados,
+quem roubasse o token poderia também fingir ser o servidor. O token único é um
+**envelope** com material público e secreto independentes, não uma chave dividida.
+
+Como Noise com PSK precisa do segredo para executar o handshake, o servidor não
+pode guardar somente `SHA-256(PSK)` como faz com o token WSS atual. Ele precisa
+guardar a PSK (ou uma chave derivada definida como a própria PSK do protocolo),
+idealmente protegida em repouso com uma chave mestra fora do YAML. Logs e a lista
+do painel nunca devem exibir novamente o envelope completo.
 
 ## Implementação
 
