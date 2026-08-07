@@ -80,3 +80,29 @@ internamente, sem pedir duas chaves ao operador.
 O orçamento inicial do perfil Noise estático é de 73–250 KiB, com meta de
 aceitação abaixo de 256 KiB. Aproximar-se de 100 KiB é plausível, porém somente a
 medição do cliente completo poderá confirmar isso por arquitetura.
+
+## Quando não construir este cliente
+
+Um agente ARMHF funcional com cerca de 1,9 MB já é pequeno para quase toda VPS,
+SBC, roteador Linux ou cartão SD. Trocar 1,9 MB por 100–250 KiB economiza menos de
+2 MB de armazenamento, mas cria outro transporte criptográfico, implementação C,
+matriz de builds, atualizações e responsabilidade de segurança.
+
+O cliente C/Noise só deve avançar se houver um requisito mensurável, por exemplo:
+
+- firmware ou initramfs com orçamento rígido abaixo de 1 MB;
+- milhares de dispositivos e atualização por enlace muito estreito;
+- flash realmente limitada;
+- plataforma sem Rust e sem bibliotecas dinâmicas adequadas;
+- tempo de inicialização ou memória medidos e incompatíveis com o agente atual.
+
+Tamanho do arquivo isolado não basta. Antes da decisão, medir em ARMHF: RSS após
+autenticação, pico de RAM com streams, CPU em repouso, tempo de conexão, tamanho
+compactado da atualização e dependências dinâmicas. Se 1,9 MB cabe e essas
+métricas são aceitáveis, endurecer o cliente WSS existente oferece mais valor do
+que manter um segundo protocolo.
+
+Prioridades antes do cliente ultramínimo: heartbeat, backpressure, allowlist
+local, testes ponta a ponta, limites contra abuso, atualização segura e revisão
+do painel administrativo. O perfil C permanece uma opção especializada, não a
+justificativa principal do projeto.
