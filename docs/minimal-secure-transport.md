@@ -99,3 +99,24 @@ O CI deve executar:
 
 O modo Noise não substitui WSS. Ele é uma opção explícita para ambientes em que
 o operador controla o firewall e prioriza tamanho do agente.
+
+## Relação com WireGuard
+
+Sim, a construção é deliberadamente parecida: WireGuard também usa um handshake
+baseado em Noise com Curve25519, ChaCha20-Poly1305, BLAKE2s e uma PSK opcional.
+Isso não torna este modo uma implementação de WireGuard.
+
+WireGuard cria uma interface IP de camada 3, encapsula pacotes IP sobre UDP,
+administra peers por chaves públicas e inclui roaming, timers, replay protection
+e mitigação de DoS próprios. O `cf-p` abre streams de aplicação a pedido do
+servidor, mantém rotas por token e não cria TUN, tabela de rotas ou uma VPN da
+rede inteira. O modo mínimo proposto roda Noise sobre TCP e reutiliza os frames
+`OPEN`/`DATA`/`CLOSE` existentes.
+
+Quando o operador controla as duas máquinas, pode liberar UDP e deseja uma VPN
+de camada 3, usar WireGuard existente é preferível a reimplementar uma VPN. O
+modo Noise do `cf-p` só se justifica quando se quer manter o modelo de publicação
+por porta/domínio, não exigir interface TUN/root e produzir um agente específico
+menor. Se depender do WireGuard já presente no kernel for aceitável, o programa
+de controle pode ser minúsculo, mas a solução deixa de ser um executável único e
+independente: passa a depender do kernel, configuração de rede e privilégios.

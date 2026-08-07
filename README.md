@@ -12,6 +12,9 @@ autossuficiente, e inclui um script para medir o piso de tamanho TLS no host.
 O perfil criptográfico sem TLS/WSS proposto usa Noise sobre TCP, chave pública
 fixada e PSK individual; veja
 [`docs/minimal-secure-transport.md`](docs/minimal-secure-transport.md).
+O desenho é aparentado ao handshake do WireGuard, mas mantém encaminhamento de
+aplicação em vez de criar uma VPN/IP; a comparação e o critério para simplesmente
+usar WireGuard estão documentados no mesmo arquivo.
 
 ## Instalação rápida na VPS
 
