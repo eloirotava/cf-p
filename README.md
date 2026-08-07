@@ -5,6 +5,29 @@ Uma alternativa mínima ao `cloudflared`, composta por dois executáveis:
 - `cfp-client`: binário pequeno que roda junto dos serviços privados;
 - `cfp-server`: processo na VPS com IP público que publica portas e domínios.
 
+Um segundo cliente mínimo em C está especificado em
+[`docs/c-client.md`](docs/c-client.md). O documento separa corretamente um
+executável pequeno com bibliotecas dinâmicas de um pacote realmente estático e
+autossuficiente, e inclui um script para medir o piso de tamanho TLS no host.
+O perfil criptográfico sem TLS/WSS proposto usa Noise sobre TCP, chave pública
+fixada e PSK individual; veja
+[`docs/minimal-secure-transport.md`](docs/minimal-secure-transport.md).
+O desenho é aparentado ao handshake do WireGuard, mas mantém encaminhamento de
+aplicação em vez de criar uma VPN/IP; a comparação e o critério para simplesmente
+usar WireGuard estão documentados no mesmo arquivo.
+O perfil mínimo pode ser provisionado com um único `CFP_TOKEN=CFPM1...`, que
+encapsula a identidade pública do servidor e a PSK do cliente sem confundir os
+dois papéis criptográficos.
+O mapa recomendado compartilha `443/tcp` entre Caddy, painel e WSS, e reserva o
+mesmo número `4443` para Noise em TCP e QUIC em UDP; veja a seção de portas no
+documento do transporte mínimo.
+
+> **Critério prático:** o cliente ARMHF próprio em Rust, com aproximadamente 1,9
+> MB, já é pequeno para a maioria dos ambientes; ele não é o `cloudflared`
+> oficial em Go. O cliente C/Noise só deve ser priorizado
+> quando medições de flash, distribuição ou memória demonstrarem um limite real;
+> caso contrário, segurança, confiabilidade e operação do WSS têm prioridade.
+
 ## Instalação rápida na VPS
 
 O projeto ainda é distribuído como código-fonte, portanto a VPS precisa do
@@ -50,6 +73,13 @@ git push origin v0.1.0
 
 Tags começando com `v` publicam automaticamente os `.tar.gz` de Linux, o `.zip`
 de Windows e seus checksums na página de releases.
+
+Também é possível publicar tudo pelo botão: abra **Actions → Build release
+binaries → Run workflow**, preencha `version` com `v0.2.0` (ou `0.2.0`) e
+confirme. O workflow valida a versão, compila todas as arquiteturas, cria a tag e
+a GitHub Release e envia automaticamente os arquivos e checksums. Use uma versão
+nova em cada execução; uma release existente com a mesma tag será atualizada em
+vez de representar uma versão diferente.
 
 Se preferir executar os comandos manualmente:
 
@@ -219,6 +249,88 @@ shell.
 
 ## Configuração
 
+### Painel web e recarga automática
+
+O servidor pode editar o próprio `server.yaml` por uma interface protegida com
+HTTP Basic. Configure credenciais exclusivas e uma porta presa ao loopback:
+
+```yaml
+admin:
+  listen: "127.0.0.1:446"
+  public_url: "wss://a.rotava.com"
+  username: "admin"
+  password: "UMA_SENHA_LONGA_E_ALEATORIA"
+```
+
+Para servir o painel e o endpoint do agente no mesmo `a.rotava.com`, o Caddy
+separa upgrades WebSocket das requisições normais:
+
+```caddyfile
+a.rotava.com {
+    @tunnel {
+        header Connection *Upgrade*
+        header Upgrade websocket
+    }
+    reverse_proxy @tunnel 127.0.0.1:444
+    reverse_proxy 127.0.0.1:446
+}
+```
+
+Depois de `caddy validate --config /etc/caddy/Caddyfile` e
+`systemctl reload caddy`, abra `https://a.rotava.com`. O painel permite criar e
+excluir clientes e rotas. Ao criar um cliente, ele gera um token aleatório,
+grava somente seu SHA-256 e mostra uma única vez comandos prontos para Linux,
+macOS, Windows PowerShell e Windows CMD. O valor de `public_url` é usado nesses
+comandos e deve ser o endereço WSS público do agente.
+
+Cada alteração é validada, escrita de forma atômica no YAML e aplicada sem
+reiniciar o processo. As sessões existentes são encerradas de propósito; os
+clientes reconectam automaticamente e passam a usar as novas rotas. A senha do
+painel fica no YAML, portanto proteja o arquivo (`chmod 600 server.yaml`) e não
+publique a porta `446` diretamente na internet. Remover todo o bloco `admin`
+desativa a interface.
+
+O túnel não transforma automaticamente qualquer porta da rede privada em uma
+porta pública. Ele encaminha somente as rotas TCP cadastradas para aquele token,
+e o processo cliente ainda precisa ter permissão e conectividade até o `target`.
+Rotas UDP usam o prefixo `udp://` nos dois lados. Como o cliente atualmente
+confia nos destinos enviados pelo servidor, comprometer a VPS ou o painel pode
+dar acesso TCP ou UDP com os mesmos
+privilégios de rede do processo cliente. Execute-o com usuário restrito e
+proteja rigorosamente a administração; uma allowlist local no agente continua
+planejada antes de uso em redes não controladas.
+
+WSS em `443/tcp` costuma atravessar NAT porque é uma conexão iniciada de dentro
+para fora, mas não é impossível de bloquear. Uma rede pode negar o domínio ou
+IP da VPS, filtrar DNS/SNI, permitir saída apenas por proxy autenticado, rejeitar
+o upgrade WebSocket, limitar conexões longas ou usar inspeção TLS em dispositivos
+administrados. Portanto, o projeto oferece transporte web compatível; não é uma
+garantia de contornar firewalls nem deve ser usado para contrariar políticas da
+rede.
+
+### Encaminhamento UDP
+
+UDP pode ser publicado explicitamente, embora continue viajando dentro do WSS
+sobre TCP:
+
+```yaml
+- listen: "udp://0.0.0.0:5353"
+  target: "udp://127.0.0.1:53"
+```
+
+Cada origem UDP pública recebe um stream lógico, e cada datagrama ocupa um frame
+`DATA`, preservando seus limites. Associações ociosas expiram depois de 60
+segundos e cada rota aceita no máximo 1024 origens simultâneas. A porta UDP deve
+ser liberada no firewall da VPS.
+
+Isso é útil para DNS, syslog, telemetria e testes simples, mas não reproduz as
+características naturais do UDP: perda de um segmento TCP bloqueia todos os
+datagramas posteriores (head-of-line blocking), retransmissões aumentam latência
+e todos os fluxos dividem a mesma conexão. Não é recomendado para jogos, mídia
+em tempo real, QUIC ou cargas sensíveis a jitter. Também não é UDP transparente
+em nível IP: o serviço privado enxerga como origem o socket criado pelo
+`cfp-client`, não o endereço original da internet.
+
 O servidor é a fonte de verdade das rotas. Neste MVP o token seleciona as rotas
 e destinos definidos na VPS; uma allowlist local no cliente será adicionada
 antes de considerar o agente pronto para ambientes não controlados.
@@ -267,6 +379,80 @@ CFP_SERVER=wss://tunnel.exemplo.com CFP_TOKEN="$TOKEN" \
 O servidor escuta TLS/WSS em `:443`; o cliente não escuta essa porta, apenas
 inicia a conexão de saída até ela. No cliente, os argumentos `--server` e
 `--token` são equivalentes às variáveis de ambiente mostradas.
+
+### Cliente no Windows pela linha de comando
+
+Baixe `cfp-windows-amd64.zip` na GitHub Release, extraia `cfp-client.exe` e abra
+PowerShell ou CMD no diretório extraído. Não é necessário instalar o Rust.
+
+PowerShell, em uma única linha:
+
+```powershell
+$env:CFP_SERVER="wss://a.rotava.com"; $env:CFP_TOKEN="TOKEN_ORIGINAL"; .\cfp-client.exe
+```
+
+CMD, em uma única linha:
+
+```cmd
+set "CFP_SERVER=wss://a.rotava.com" && set "CFP_TOKEN=TOKEN_ORIGINAL" && cfp-client.exe
+```
+
+Também é possível passar argumentos diretamente:
+
+```powershell
+.\cfp-client.exe --server "wss://a.rotava.com" --token "TOKEN_ORIGINAL"
+```
+
+Variáveis de ambiente são preferíveis porque argumentos podem aparecer em
+ferramentas que listam a linha de comando dos processos. Use o token original
+mostrado uma vez pelo painel, não o `token_sha256` armazenado no servidor.
+
+Enquanto aparecer `tunel autenticado`, mantenha a janela aberta. `Ctrl+C` encerra
+o agente. O certificado de `a.rotava.com` precisa ser válido para o Windows; o
+cliente não possui modo para ignorar erros TLS.
+
+Para conferir o pacote antes de extrair, coloque o `.zip` e seu `.sha256` no
+mesmo diretório e compare:
+
+```powershell
+(Get-FileHash .\cfp-windows-amd64.zip -Algorithm SHA256).Hash.ToLower()
+Get-Content .\cfp-windows-amd64.zip.sha256
+```
+
+Se aparecer somente `falha ao conectar WSS`, verifique primeiro DNS e TCP no
+mesmo CMD/PowerShell:
+
+```powershell
+Resolve-DnsName a.rotava.com
+Test-NetConnection a.rotava.com -Port 443
+curl.exe -v https://a.rotava.com/
+```
+
+`TcpTestSucceeded: False` indica bloqueio de rede, DNS/IP incorreto ou Caddy
+inacessível. Se TCP e HTTPS funcionarem, atualize para a release mais recente: o
+cliente agora imprime a cadeia completa do erro, diferenciando resolução DNS,
+conexão recusada, certificado TLS e resposta inválida ao upgrade WebSocket.
+
+Se o erro for `UnknownIssuer` apenas na rede da empresa, ela provavelmente usa
+inspeção TLS com uma CA corporativa. As builds novas mantêm as raízes públicas e
+também carregam o trust store nativo do sistema; no Windows, uma CA corporativa
+instalada corretamente em **Trusted Root Certification Authorities** passa a ser
+aceita. Gere uma nova release e substitua o executável antigo.
+
+Confirme a cadeia apresentada pela rede antes de confiar nela:
+
+```powershell
+curl.exe -v https://a.rotava.com/
+certutil -store Root
+```
+
+Se a CA não estiver instalada, solicite o certificado raiz e as instruções ao TI.
+Não adicione opção para ignorar certificados, não use `curl -k` como solução e
+não importe certificados obtidos de fontes não verificadas. Fora da rede
+corporativa, o cliente continua aceitando a cadeia pública normal do Caddy.
+
+Nunca publique tokens reais em logs, chats ou issues. Se isso acontecer, gere um
+novo token, substitua o hash no servidor e descarte imediatamente o anterior.
 
 ### Certificado para `a.rotava.com`
 
@@ -397,12 +583,115 @@ Para cada conexão em uma porta pública, o servidor aloca um `stream_id` e envi
 janela limitada, timeouts e half-close. Isso atende SSH, bancos e protocolos TCP
 genéricos.
 
+É possível colocar quantas rotas forem necessárias no mesmo token:
+
+```yaml
+clients:
+  - token_sha256: "HASH_DO_TOKEN"
+    routes:
+      - listen: "0.0.0.0:33890"
+        target: "127.0.0.1:3389"
+      - listen: "0.0.0.0:2222"
+        target: "127.0.0.1:22"
+      - listen: "b.rotava.com"
+        target: "127.0.0.1:3000"
+```
+
+Cada `listen` precisa ser único na VPS inteira, inclusive entre tokens
+diferentes: sockets não podem repetir endereço/porta e hostnames não podem ter
+duas sessões responsáveis ao mesmo tempo. Um mesmo `target` pode ser reutilizado
+por várias rotas. O cliente não repete essa configuração: o servidor seleciona
+as rotas pelo token e envia cada `target` no frame `OPEN`.
+
+### Vários clientes
+
+Sim: cada item de `clients` representa uma máquina/agente diferente. Cada um
+usa seu próprio token original no `CFP_TOKEN` e possui seu próprio hash e suas
+próprias rotas no servidor:
+
+```yaml
+clients:
+  - token_sha256: "HASH_DO_TOKEN_A"
+    routes:
+      - listen: "0.0.0.0:33890"
+        target: "127.0.0.1:3389"
+      - listen: "casa.rotava.com"
+        target: "127.0.0.1:3000"
+
+  - token_sha256: "HASH_DO_TOKEN_B"
+    routes:
+      - listen: "0.0.0.0:33891"
+        target: "127.0.0.1:3389"
+      - listen: "escritorio.rotava.com"
+        target: "127.0.0.1:3000"
+```
+
+Nos dois clientes o `target` é `127.0.0.1:3389`, mas cada endereço se refere à
+própria máquina onde aquele `cfp-client` está rodando. Na máquina A, execute com
+o token A; na máquina B, com o token B.
+
+Tokens e valores de `listen` não podem se repetir. O servidor agora valida isso
+ao iniciar e recusa configurações ambíguas antes de abrir qualquer porta. Uma
+mesma credencial também não deve ser usada simultaneamente por duas instâncias
+do cliente, porque ambas representariam a mesma identidade e disputariam as
+mesmas rotas.
+
 ### Domínios HTTP/HTTPS
 
-Na próxima etapa, o servidor terminará TLS, escolherá a rota pelo `Host` e
-encaminhará HTTP pelo túnel. Isso permitirá servir vários domínios no mesmo
-`:443`, automatizar certificados e adicionar `X-Forwarded-For` de forma
-controlada. Essa parte ainda não está implementada no MVP atual.
+O servidor também roteia HTTP diretamente pelo hostname, sem criar uma porta
+intermediária por site. Para publicar a aplicação privada
+`127.0.0.1:3000` como `b.rotava.com`, configure no `server.yaml`:
+
+```yaml
+clients:
+  - token_sha256: "HASH_DO_TOKEN"
+    routes:
+      - listen: "b.rotava.com"
+        target: "127.0.0.1:3000"
+```
+
+No topo do mesmo arquivo, `http_listen` é o único upstream local usado por todos
+os domínios:
+
+```yaml
+listen: "127.0.0.1:444"
+http_listen: "127.0.0.1:445"
+```
+
+No DNS, `b.rotava.com` deve apontar para o IP da VPS. No `Caddyfile`:
+
+```caddyfile
+# Conexão WSS persistente do cfp-client.
+a.rotava.com {
+    reverse_proxy 127.0.0.1:444
+}
+
+# Todos os sites publicados podem compartilhar o roteador HTTP do cfp-server.
+b.rotava.com {
+    reverse_proxy 127.0.0.1:445
+}
+```
+
+O fluxo fica:
+
+```text
+navegador → HTTPS/443 → Caddy → cfp-server:445
+                                      │ Host: b.rotava.com
+                                      ↓
+                                WSS → cfp-client → 127.0.0.1:3000
+```
+
+Caddy cuida do certificado e HTTPS. O `cfp-server` lê `Host`, encontra a rota
+registrada pela sessão autenticada e encaminha a conexão HTTP para o `target`.
+A porta `445` fica em loopback e não deve ser liberada no firewall. Vários
+domínios podem apontar para a mesma `445`; cada um ainda precisa de seu bloco no
+Caddy (ou de um wildcard) e de sua rota no `server.yaml`.
+
+Rotas por domínio são HTTP neste MVP. Portanto, `listen: "b.rotava.com"` com
+`target: "127.0.0.1:3389"` não transforma RDP em site: um navegador enviaria
+HTTP para um serviço RDP. Para RDP e outros protocolos TCP, continue usando uma
+porta pública como `0.0.0.0:33890`. TLS passthrough por SNI será uma
+funcionalidade separada.
 
 TLS passthrough por SNI pode vir depois. Nesse modo, o servidor inspeciona o
 ClientHello somente para escolher a rota e encaminha os bytes intactos; o
@@ -424,15 +713,14 @@ alteração de headers ou fallback confiável para clientes sem SNI.
 - expor métricas de sessões, reconexões, streams, bytes, filas e erros;
 - realizar shutdown gracioso e validar toda a configuração antes de aplicá-la.
 
-## Escopo do MVP
+## Estado do MVP
 
-1. workspace Rust com `cfp-client`, `cfp-server` e crate de protocolo;
-2. WSS, autenticação, heartbeat e reconexão;
-3. multiplexação com backpressure e encaminhamento TCP;
-4. reverse proxy HTTP/HTTPS por hostname;
-5. limites, logs estruturados e métricas básicas;
-6. medição automática do tamanho do cliente em release;
-7. depois: cliente C, pool de WebSockets, hot reload, TLS passthrough e UDP.
+Já implementado: workspace Rust, WSS, autenticação, reconexão, multiplexação e
+encaminhamento TCP. Domínios funcionam com Caddy e uma rota TCP local por
+upstream, como descrito acima.
+
+Próximos passos: heartbeat, controle de fluxo explícito, limites, métricas,
+roteamento HTTP nativo por hostname, hot reload, TLS passthrough e UDP.
 
 ```text
 crates/cfp-client/     agente mínimo

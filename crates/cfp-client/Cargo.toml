@@ -10,6 +10,8 @@ cfp-protocol = { path = "../cfp-protocol" }
 clap.workspace = true
 futures-util.workspace = true
 tokio.workspace = true
-tokio-tungstenite.workspace = true
+# Além das raízes públicas embutidas, carrega o trust store nativo. No Windows
+# isso inclui CAs corporativas instaladas pela organização para inspeção TLS.
+tokio-tungstenite = { workspace = true, features = ["rustls-tls-native-roots"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
