@@ -5,28 +5,9 @@ Uma alternativa mínima ao `cloudflared`, composta por dois executáveis:
 - `cfp-client`: binário pequeno que roda junto dos serviços privados;
 - `cfp-server`: processo na VPS com IP público que publica portas e domínios.
 
-Um segundo cliente mínimo em C está especificado em
-[`docs/c-client.md`](docs/c-client.md). O documento separa corretamente um
-executável pequeno com bibliotecas dinâmicas de um pacote realmente estático e
-autossuficiente, e inclui um script para medir o piso de tamanho TLS no host.
-O perfil criptográfico sem TLS/WSS proposto usa Noise sobre TCP, chave pública
-fixada e PSK individual; veja
-[`docs/minimal-secure-transport.md`](docs/minimal-secure-transport.md).
-O desenho é aparentado ao handshake do WireGuard, mas mantém encaminhamento de
-aplicação em vez de criar uma VPN/IP; a comparação e o critério para simplesmente
-usar WireGuard estão documentados no mesmo arquivo.
-O perfil mínimo pode ser provisionado com um único `CFP_TOKEN=CFPM1...`, que
-encapsula a identidade pública do servidor e a PSK do cliente sem confundir os
-dois papéis criptográficos.
-O mapa recomendado compartilha `443/tcp` entre Caddy, painel e WSS, e reserva o
-mesmo número `4443` para Noise em TCP e QUIC em UDP; veja a seção de portas no
-documento do transporte mínimo.
-
-> **Critério prático:** o cliente ARMHF próprio em Rust, com aproximadamente 1,9
-> MB, já é pequeno para a maioria dos ambientes; ele não é o `cloudflared`
-> oficial em Go. O cliente C/Noise só deve ser priorizado
-> quando medições de flash, distribuição ou memória demonstrarem um limite real;
-> caso contrário, segurança, confiabilidade e operação do WSS têm prioridade.
+> **Escopo:** o transporte é WSS sobre TCP, e só. Os modos Noise/TCP e QUIC/UDP
+> chegaram a ser especificados, mas nunca foram implementados e a especificação
+> foi removida para o repositório não descrever um sistema que não existe.
 
 ## Instalação rápida na VPS
 
@@ -158,44 +139,13 @@ o padrão, com hostname e certificado legítimos.
 
 ## Linguagem e tamanho
 
-**Go não é a escolha deste projeto**, pois mesmo um programa simples carrega um
-runtime relativamente grande. Há duas opções adequadas:
-
-### Opção recomendada: Rust nos dois lados
-
-Rust oferece segurança de memória sem garbage collector e mantém uma única
-base de protocolo. O servidor pode usar um runtime assíncrono; o cliente deve
-evitar frameworks HTTP completos e implementar somente o necessário para o
-handshake e os frames WebSocket sobre uma biblioteca TLS pequena.
-
-Perfil de release sugerido:
-
-```toml
-[profile.release]
-opt-level = "z"
-lto = true
-codegen-units = 1
-panic = "abort"
-strip = true
-```
-
-Também devem ser desabilitadas features padrão não utilizadas, e o tamanho real
-do cliente deve ser verificado em CI. `musl` facilita distribuição estática,
-mas não garante por si só o menor binário; é necessário comparar os artefatos
-por plataforma.
-
-### Menor cliente possível: C no cliente, Rust no servidor
-
-Se cada kilobyte for prioritário, o cliente pode ser C, com uma biblioteca TLS
-compacta e uma implementação WebSocket mínima e auditável. O servidor pode
-continuar em Rust, onde tamanho é irrelevante. O custo é manter duas
-implementações do protocolo e assumir riscos maiores de segurança de memória no
-componente instalado em redes privadas.
-
-Não se deve implementar TLS. A comparação de tamanho precisa incluir o binário
-e a biblioteca TLS efetivamente distribuídos; um executável C aparentemente
-pequeno que depende de várias bibliotecas dinâmicas não é um cliente menor na
-prática.
+Rust nos dois lados, por segurança de memória sem garbage collector e uma única
+base de protocolo. O perfil de release em `Cargo.toml` já otimiza tamanho
+(`opt-level = "z"`, `lto`, `codegen-units = 1`, `panic = "abort"`, `strip`), e o
+cliente ARMHF resultante fica em torno de 1,9 MB — pequeno o suficiente para a
+maioria dos ambientes. Um cliente em C foi considerado e descartado: manter duas
+implementações do protocolo e assumir riscos de memória no componente instalado
+dentro da rede privada não se paga por alguns kilobytes.
 
 ## Sessão WebSocket
 
