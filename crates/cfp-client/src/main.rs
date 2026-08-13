@@ -1,4 +1,8 @@
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use anyhow::{Context, Result};
 use cfp_protocol::*;
@@ -28,11 +32,17 @@ async fn main() -> Result<()> {
     let args = Args::parse();
     let mut delay = 1;
     loop {
+        let started = Instant::now();
         if let Err(error) = run(&args).await {
             // `{error:#}` inclui toda a cadeia de causas do anyhow. Sem isso,
             // erros de DNS, TCP, TLS e handshake apareciam apenas como
             // "falha ao conectar WSS", dificultando diagnóstico no Windows.
             warn!(error = %format!("{error:#}"), "tunel desconectado");
+        }
+        // Uma sessão que durou reinicia o backoff: sem isso, um túnel de horas
+        // derrubado por uma reconfiguração esperaria os 30s do teto para voltar.
+        if started.elapsed() >= Duration::from_secs(60) {
+            delay = 1;
         }
         tokio::time::sleep(Duration::from_secs(delay)).await;
         delay = (delay * 2).min(30);

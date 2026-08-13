@@ -116,7 +116,7 @@ async fn main() -> Result<()> {
         let (tcp, peer) = listener.accept().await?;
         let acceptor = acceptor.clone();
         let clients = clients.clone();
-        let reload = reload_rx.clone();
+        let reload = session_reload(&reload_rx);
         let domains = domains.clone();
         tokio::spawn(async move {
             let result = match acceptor {
@@ -141,6 +141,20 @@ async fn main() -> Result<()> {
             }
         });
     }
+}
+
+/// Deriva o receptor de recarga de uma nova sessao.
+///
+/// O receptor mestre em `main` nunca observa as versoes do watch, e um clone
+/// herda a versao ja vista pela origem. Sem marcar o clone como atualizado,
+/// toda sessao aberta depois do primeiro POST no painel nasceria atrasada:
+/// `changed()` retornaria imediatamente e derrubaria o cliente logo apos o
+/// AUTH_OK, num laco infinito de reconexao. Marcado aqui, cada sessao so
+/// reage as alteracoes de configuracao posteriores a ela.
+fn session_reload(master: &watch::Receiver<u64>) -> watch::Receiver<u64> {
+    let mut reload = master.clone();
+    reload.mark_unchanged();
+    reload
 }
 
 async fn serve<S>(
@@ -878,6 +892,26 @@ mod tests {
         assert!(!same_origin_or_absent(
             "Host: a.rotava.com\r\nOrigin: https://evil.example\r\n"
         ));
+    }
+
+    #[tokio::test]
+    async fn session_ignores_reloads_anteriores_a_ela() {
+        let (tx, master) = watch::channel(0_u64);
+        tx.send_modify(|generation| *generation += 1);
+
+        let mut reload = session_reload(&master);
+        let immediate =
+            tokio::time::timeout(std::time::Duration::from_millis(50), reload.changed()).await;
+        assert!(
+            immediate.is_err(),
+            "sessao caiu por alteracao anterior a ela"
+        );
+
+        tx.send_modify(|generation| *generation += 1);
+        assert!(
+            reload.changed().await.is_ok(),
+            "sessao ignorou alteracao posterior"
+        );
     }
 
     #[test]
