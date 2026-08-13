@@ -32,11 +32,21 @@ struct Args {
 }
 #[derive(Clone, Deserialize, Serialize)]
 struct Route {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    name: String,
     listen: String,
     target: String,
 }
 #[derive(Clone, Deserialize, Serialize)]
 struct Client {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    name: String,
+    /// Token em texto puro, guardado para o painel poder reexibi-lo. A
+    /// autenticacao continua comparando `token_sha256`, entao clientes criados
+    /// antes deste campo seguem funcionando sem ele -- apenas nao ha o que
+    /// mostrar. Quem obtiver este arquivo obtem acesso direto aos tuneis.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    token: Option<String>,
     token_sha256: String,
     routes: Vec<Route>,
 }
@@ -437,26 +447,116 @@ async fn handle_admin(
             .await;
         }
         let form = parse_form(&request[header_end..]);
-        let mut cfg: Config = serde_yaml::from_reader(File::open(&config_path)?)?;
-        let mut issued_token = None;
-        match path {
+        // Erro aqui e culpa do preenchimento, nao do servidor: renderiza o
+        // painel com a mensagem em vez de derrubar a conexao sem resposta.
+        let alterado = match aplicar(path, &form, &config_path) {
+            Ok(Some(cfg)) => cfg,
+            Ok(None) => {
+                return http_response(
+                    &mut stream,
+                    "404 Not Found",
+                    "text/plain",
+                    "Nao encontrado",
+                    &[],
+                )
+                .await;
+            }
+            Err(error) => {
+                let cfg: Config = serde_yaml::from_reader(File::open(&config_path)?)?;
+                return http_response(
+                    &mut stream,
+                    "422 Unprocessable Content",
+                    "text/html; charset=utf-8",
+                    &render_admin(&cfg, Some(&format!("{error:#}"))),
+                    &[],
+                )
+                .await;
+            }
+        };
+        save_config(&config_path, &alterado)?;
+        *clients.write().await = alterado.clients.clone();
+        reload.send_modify(|generation| *generation += 1);
+        return http_response(
+            &mut stream,
+            "200 OK",
+            "text/html; charset=utf-8",
+            &render_admin(&alterado, None),
+            &[],
+        )
+        .await;
+    }
+    let cfg: Config = serde_yaml::from_reader(File::open(&config_path)?)?;
+    http_response(
+        &mut stream,
+        "200 OK",
+        "text/html; charset=utf-8",
+        &render_admin(&cfg, None),
+        &[],
+    )
+    .await
+}
+
+/// Aplica a alteracao pedida e devolve a configuracao validada.
+///
+/// `Ok(None)` significa caminho desconhecido. Qualquer `Err` e problema do
+/// formulario -- campo faltando, indice inexistente, listen duplicado -- e o
+/// chamador o transforma em mensagem na pagina.
+fn aplicar(
+    path: &str,
+    form: &HashMap<String, String>,
+    config_path: &Path,
+) -> Result<Option<Config>> {
+    let form = form;
+    let mut cfg: Config = serde_yaml::from_reader(File::open(config_path)?)?;
+    match path {
             "/clients" => {
                 let mut bytes = [0_u8; 32];
                 rand::rng().fill_bytes(&mut bytes);
                 let token = hex::encode(bytes);
                 cfg.clients.push(Client {
+                    name: opcional(&form, "name").into(),
                     token_sha256: hex::encode(Sha256::digest(token.as_bytes())),
+                    token: Some(token),
                     routes: vec![],
                 });
-                issued_token = Some(token);
+            }
+            "/rename-client" => {
+                let index: usize = field(&form, "client")?.parse()?;
+                let client = cfg.clients.get_mut(index).context("cliente inexistente")?;
+                client.name = opcional(&form, "name").into();
+            }
+            "/rotate-token" => {
+                let index: usize = field(&form, "client")?.parse()?;
+                let client = cfg.clients.get_mut(index).context("cliente inexistente")?;
+                let mut bytes = [0_u8; 32];
+                rand::rng().fill_bytes(&mut bytes);
+                let token = hex::encode(bytes);
+                client.token_sha256 = hex::encode(Sha256::digest(token.as_bytes()));
+                client.token = Some(token);
             }
             "/routes" => {
                 let index: usize = field(&form, "client")?.parse()?;
                 let client = cfg.clients.get_mut(index).context("cliente inexistente")?;
                 client.routes.push(Route {
+                    name: opcional(&form, "name").into(),
                     listen: field(&form, "listen")?.into(),
                     target: field(&form, "target")?.into(),
                 });
+            }
+            "/edit-route" => {
+                let client: usize = field(&form, "client")?.parse()?;
+                let index: usize = field(&form, "route")?.parse()?;
+                let (listen, target) = (field(&form, "listen")?, field(&form, "target")?);
+                let route = cfg
+                    .clients
+                    .get_mut(client)
+                    .context("cliente inexistente")?
+                    .routes
+                    .get_mut(index)
+                    .context("rota inexistente")?;
+                route.name = opcional(&form, "name").into();
+                route.listen = listen.into();
+                route.target = target.into();
             }
             "/delete-route" => {
                 let client: usize = field(&form, "client")?.parse()?;
@@ -474,40 +574,10 @@ async fn handle_admin(
                 cfg.clients.get(index).context("cliente inexistente")?;
                 cfg.clients.remove(index);
             }
-            _ => {
-                return http_response(
-                    &mut stream,
-                    "404 Not Found",
-                    "text/plain",
-                    "Nao encontrado",
-                    &[],
-                )
-                .await;
-            }
+            _ => return Ok(None),
         }
         validate_config(&cfg)?;
-        save_config(&config_path, &cfg)?;
-        *clients.write().await = cfg.clients.clone();
-        reload.send_modify(|generation| *generation += 1);
-        let body = render_admin(&cfg, issued_token.as_deref());
-        return http_response(
-            &mut stream,
-            "200 OK",
-            "text/html; charset=utf-8",
-            &body,
-            &[],
-        )
-        .await;
-    }
-    let cfg: Config = serde_yaml::from_reader(File::open(&config_path)?)?;
-    http_response(
-        &mut stream,
-        "200 OK",
-        "text/html; charset=utf-8",
-        &render_admin(&cfg, None),
-        &[],
-    )
-    .await
+        Ok(Some(cfg))
 }
 
 async fn read_http_request(stream: &mut TcpStream, limit: usize) -> Result<Vec<u8>> {
@@ -608,6 +678,10 @@ fn field<'a>(form: &'a HashMap<String, String>, name: &str) -> Result<&'a str> {
         .filter(|v| !v.trim().is_empty())
         .with_context(|| format!("campo {name} ausente"))
 }
+/// Campo cuja ausencia nao e erro, como os nomes livres do painel.
+fn opcional<'a>(form: &'a HashMap<String, String>, name: &str) -> &'a str {
+    form.get(name).map(|v| v.trim()).unwrap_or_default()
+}
 fn escape(value: &str) -> String {
     value
         .replace('&', "&amp;")
@@ -616,24 +690,80 @@ fn escape(value: &str) -> String {
         .replace('"', "&quot;")
 }
 
-fn render_admin(cfg: &Config, token: Option<&str>) -> String {
-    let mut cards = String::new();
-    for (ci, client) in cfg.clients.iter().enumerate() {
-        let short = &client.token_sha256[..client.token_sha256.len().min(12)];
-        cards.push_str(&format!("<section><h2>Cliente {} <code>{}…</code></h2><form method=post action=/delete-client><input type=hidden name=client value={ci}><button class=danger>Excluir cliente</button></form>", ci + 1, escape(short)));
-        for (ri, route) in client.routes.iter().enumerate() {
-            cards.push_str(&format!("<div class=route><code>{}</code> → <code>{}</code><form method=post action=/delete-route><input type=hidden name=client value={ci}><input type=hidden name=route value={ri}><button class=danger>Excluir</button></form></div>", escape(&route.listen), escape(&route.target)));
-        }
-        cards.push_str(&format!("<form method=post action=/routes><input type=hidden name=client value={ci}><input name=listen required placeholder='b.rotava.com ou 0.0.0.0:33890'><input name=target required placeholder='127.0.0.1:3000'><button>Adicionar rota</button></form></section>"));
-    }
+fn render_admin(cfg: &Config, erro: Option<&str>) -> String {
     let server = cfg
         .admin
         .as_ref()
         .map(|admin| admin.public_url.as_str())
         .unwrap_or("wss://a.rotava.com");
-    let notice = token.map(|t| format!("<aside><strong>Copie agora; o token não será mostrado novamente.</strong><code>{}</code><h3>Linux / macOS</h3><pre>CFP_SERVER=\"{}\" CFP_TOKEN=\"{}\" ./cfp-client</pre><h3>Windows PowerShell</h3><pre>$env:CFP_SERVER=\"{}\"; $env:CFP_TOKEN=\"{}\"; .\\cfp-client.exe</pre><h3>Windows CMD</h3><pre>set \"CFP_SERVER={}\" &amp;&amp; set \"CFP_TOKEN={}\" &amp;&amp; cfp-client.exe</pre></aside>", escape(t), escape(server), escape(t), escape(server), escape(t), escape(server), escape(t))).unwrap_or_default();
+    let mut cards = String::new();
+    for (ci, client) in cfg.clients.iter().enumerate() {
+        let titulo = if client.name.is_empty() {
+            format!("Cliente {}", ci + 1)
+        } else {
+            escape(&client.name)
+        };
+        cards.push_str(&format!(
+            "<section><h2>{titulo}</h2>\
+             <form method=post action=/rename-client><input type=hidden name=client value={ci}>\
+             <input name=name value=\"{}\" placeholder='nome do cliente, ex.: bananapi'>\
+             <button>Renomear</button></form>",
+            escape(&client.name)
+        ));
+
+        cards.push_str(&match &client.token {
+            Some(token) => format!(
+                "<div class=token><code>{}</code>\
+                 <details><summary>Como executar</summary>\
+                 <h3>Linux / macOS</h3><pre>CFP_SERVER=\"{}\" CFP_TOKEN=\"{}\" ./cfp-client</pre>\
+                 <h3>Windows PowerShell</h3><pre>$env:CFP_SERVER=\"{}\"; $env:CFP_TOKEN=\"{}\"; .\\cfp-client.exe</pre>\
+                 </details></div>",
+                escape(token),
+                escape(server),
+                escape(token),
+                escape(server),
+                escape(token)
+            ),
+            None => format!(
+                "<div class=token><em>Token criado antes do painel guardar o valor; \
+                 só o hash <code>{}…</code> existe. Gere um novo para poder vê-lo.</em></div>",
+                escape(&client.token_sha256[..client.token_sha256.len().min(12)])
+            ),
+        });
+
+        for (ri, route) in client.routes.iter().enumerate() {
+            cards.push_str(&format!(
+                "<div class=route><form method=post action=/edit-route>\
+                 <input type=hidden name=client value={ci}><input type=hidden name=route value={ri}>\
+                 <input name=name value=\"{}\" placeholder='nome do túnel'>\
+                 <input name=listen value=\"{}\" required><input name=target value=\"{}\" required>\
+                 <button>Salvar</button></form>\
+                 <form method=post action=/delete-route><input type=hidden name=client value={ci}>\
+                 <input type=hidden name=route value={ri}><button class=danger>Excluir</button></form></div>",
+                escape(&route.name),
+                escape(&route.listen),
+                escape(&route.target)
+            ));
+        }
+
+        cards.push_str(&format!(
+            "<form method=post action=/routes><input type=hidden name=client value={ci}>\
+             <input name=name placeholder='nome do túnel'>\
+             <input name=listen required placeholder='b.rotava.com ou 0.0.0.0:33890'>\
+             <input name=target required placeholder='127.0.0.1:3000'>\
+             <button>Adicionar rota</button></form>\
+             <div class=perigo><form method=post action=/rotate-token>\
+             <input type=hidden name=client value={ci}>\
+             <button class=danger>Gerar novo token</button></form>\
+             <form method=post action=/delete-client><input type=hidden name=client value={ci}>\
+             <button class=danger>Excluir cliente</button></form></div></section>"
+        ));
+    }
+    let aviso = erro
+        .map(|e| format!("<p class=erro>{}</p>", escape(e)))
+        .unwrap_or_default();
     format!(
-        r#"<!doctype html><html lang=pt-br><meta charset=utf-8><meta name=viewport content="width=device-width"><title>cf-p</title><style>body{{font:16px system-ui;max-width:900px;margin:40px auto;padding:0 16px;background:#10131a;color:#e8edf5}}h1{{color:#77d5ff}}section,aside{{background:#1b2130;padding:20px;margin:18px 0;border-radius:12px}}code,pre{{background:#090b10;padding:5px;border-radius:5px;overflow:auto}}aside code{{display:block;margin:14px 0}}form{{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}}input{{flex:1;min-width:220px;padding:10px}}button{{padding:10px;background:#168aad;color:white;border:0;border-radius:6px}}.danger{{background:#9b2c2c}}.route{{display:flex;align-items:center;gap:8px;flex-wrap:wrap;border-top:1px solid #343b4b}}</style><h1>cf-p</h1><p>Configuração ativa. Alterações são salvas no YAML e os clientes reconectam automaticamente.</p>{notice}<form method=post action=/clients><button>Novo cliente + token</button></form>{cards}</html>"#
+        r#"<!doctype html><html lang=pt-br><meta charset=utf-8><meta name=viewport content="width=device-width"><title>cf-p</title><style>body{{font:16px system-ui;max-width:900px;margin:40px auto;padding:0 16px;background:#10131a;color:#e8edf5}}h1{{color:#77d5ff}}h2{{margin:0 0 4px}}h3{{margin:14px 0 4px;font-size:14px;color:#9fb0c8}}section{{background:#1b2130;padding:20px;margin:18px 0;border-radius:12px}}code,pre{{background:#090b10;padding:5px;border-radius:5px;overflow:auto}}.token code{{display:block;margin:10px 0;word-break:break-all}}summary{{cursor:pointer;color:#77d5ff;font-size:14px}}form{{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}}input{{flex:1;min-width:180px;padding:10px;background:#0d1017;color:#e8edf5;border:1px solid #343b4b;border-radius:6px}}button{{padding:10px;background:#168aad;color:white;border:0;border-radius:6px;cursor:pointer}}.danger{{background:#9b2c2c}}.route{{display:flex;align-items:center;gap:8px;flex-wrap:wrap;border-top:1px solid #343b4b;padding-top:6px}}.perigo{{display:flex;gap:8px;border-top:1px solid #343b4b;padding-top:12px;margin-top:12px}}.perigo form{{margin:0}}.erro{{background:#4a1d1d;border:1px solid #9b2c2c;padding:12px;border-radius:8px}}</style><h1>cf-p</h1>{aviso}<p>Configuração ativa. Alterações são salvas no YAML e os clientes reconectam automaticamente.</p><form method=post action=/clients><input name=name placeholder='nome do cliente, ex.: bananapi'><button>Novo cliente + token</button></form>{cards}</html>"#
     )
 }
 
@@ -738,8 +868,11 @@ mod tests {
     #[test]
     fn rejects_duplicate_tokens_and_routes() {
         let client = |token: &str, listen: &str| Client {
+            name: String::new(),
+            token: None,
             token_sha256: token.into(),
             routes: vec![Route {
+                name: String::new(),
                 listen: listen.into(),
                 target: "127.0.0.1:1".into(),
             }],
@@ -771,6 +904,58 @@ mod tests {
         assert!(!same_origin_or_absent(
             "Host: a.rotava.com\r\nOrigin: https://evil.example\r\n"
         ));
+    }
+
+    #[test]
+    fn aplicar_renomeia_e_recusa_listen_duplicado() {
+        let path = std::env::temp_dir().join(format!("cfp-teste-{}.yaml", std::process::id()));
+        let base = Config {
+            listen: "127.0.0.1:444".into(),
+            http_listen: "127.0.0.1:445".into(),
+            admin: None,
+            clients: vec![Client {
+                name: String::new(),
+                token: None,
+                token_sha256: "a".repeat(64),
+                routes: vec![Route {
+                    name: String::new(),
+                    listen: "b.rotava.com".into(),
+                    target: "127.0.0.1:1".into(),
+                }],
+            }],
+        };
+        save_config(&path, &base).unwrap();
+        let form = |pares: &[(&str, &str)]| -> HashMap<String, String> {
+            pares
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect()
+        };
+
+        let renomeado = aplicar(
+            "/rename-client",
+            &form(&[("client", "0"), ("name", "bananapi")]),
+            &path,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(renomeado.clients[0].name, "bananapi");
+
+        // O mesmo hostname em outra rota precisa ser recusado, e como erro do
+        // formulario -- nao como falha que derruba a conexao sem resposta.
+        let duplicado = aplicar(
+            "/routes",
+            &form(&[
+                ("client", "0"),
+                ("listen", "B.Rotava.com"),
+                ("target", "127.0.0.1:2"),
+            ]),
+            &path,
+        );
+        assert!(duplicado.is_err());
+
+        assert!(aplicar("/inexistente", &form(&[]), &path).unwrap().is_none());
+        let _ = fs::remove_file(&path);
     }
 
     #[tokio::test]
