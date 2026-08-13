@@ -932,8 +932,10 @@ fn validate_config(config: &Config) -> Result<()> {
         }
     }
     let mut tokens = HashSet::new();
-    let mut listeners = HashSet::new();
-    for client in &config.clients {
+    // Guarda quem ja ocupa cada listen para poder dizer onde esta o conflito:
+    // "duplicado" sem apontar o dono manda o operador procurar a olho.
+    let mut listeners: HashMap<String, String> = HashMap::new();
+    for (indice, client) in config.clients.iter().enumerate() {
         if client.token_sha256.len() != 64
             || !client
                 .token_sha256
@@ -954,8 +956,17 @@ fn validate_config(config: &Config) -> Result<()> {
             if listener.is_empty() {
                 anyhow::bail!("listen vazio em uma rota");
             }
-            if !listeners.insert(listener.clone()) {
-                anyhow::bail!("listen duplicado no server.yaml: {listener}");
+            let dono = if client.name.is_empty() {
+                format!("cliente {}", indice + 1)
+            } else {
+                format!("cliente \"{}\"", client.name)
+            };
+            if let Some(ja_usa) = listeners.insert(listener.clone(), dono) {
+                anyhow::bail!(
+                    "{listener} ja esta em uso pelo {ja_usa}. \
+                     Cada endereco atende uma rota so -- para trocar o destino, \
+                     use Salvar na rota existente em vez de adicionar outra."
+                );
             }
         }
     }
@@ -1003,7 +1014,12 @@ mod tests {
 
         config.clients[1].token_sha256 = "b".repeat(64);
         config.clients[1].routes[0].listen = "B.ROTAVA.COM".into();
-        assert!(validate_config(&config).is_err());
+        config.clients[0].name = "bananapi".into();
+        let erro = validate_config(&config).unwrap_err().to_string();
+        // A mensagem precisa dizer onde esta o conflito: quem opera esta no
+        // painel, nao lendo o YAML.
+        assert!(erro.contains("b.rotava.com"), "{erro}");
+        assert!(erro.contains("bananapi"), "{erro}");
     }
 
     #[test]
