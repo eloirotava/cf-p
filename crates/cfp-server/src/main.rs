@@ -751,6 +751,23 @@ fn escape(value: &str) -> String {
         .replace('"', "&quot;")
 }
 
+/// Favicon embutido no proprio HTML: uma seta atravessando a fresta de uma
+/// barreira, que e o que o cf-p faz -- sair de dentro da rede privada sem abrir
+/// porta no roteador. Inline evita rota nova, arquivo extra e uma requisicao a
+/// cada pagina; `%23` e o `#` das cores, que num data URI precisa ser escapado.
+///
+/// Somente formas preenchidas, sem `stroke`: a barreira clara sobre fundo
+/// escuro e a seta cheia continuam legiveis nos 16px de uma aba, que e onde
+/// este desenho de fato vive.
+const FAVICON: &str = "data:image/svg+xml,\
+<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'>\
+<rect width='32' height='32' rx='7' fill='%230d1017'/>\
+<rect x='12' y='2' width='6' height='10' rx='3' fill='%23e8edf5'/>\
+<rect x='12' y='20' width='6' height='10' rx='3' fill='%23e8edf5'/>\
+<rect x='4' y='14' width='15' height='4' rx='2' fill='%2377d5ff'/>\
+<path d='M17 10 28 16l-11 6z' fill='%2377d5ff'/>\
+</svg>";
+
 /// Ha quanto tempo, em texto curto. O painel precisa responder "desde quando",
 /// nao a hora exata, e isso dispensa uma dependencia de formatacao de data.
 fn ha(desde: std::time::SystemTime) -> String {
@@ -858,7 +875,7 @@ fn render_admin(
         .map(|e| format!("<p class=erro>{}</p>", escape(e)))
         .unwrap_or_default();
     format!(
-        r#"<!doctype html><html lang=pt-br><meta charset=utf-8><meta name=viewport content="width=device-width"><title>cf-p</title><style>body{{font:16px system-ui;max-width:900px;margin:40px auto;padding:0 16px;background:#10131a;color:#e8edf5}}h1{{color:#77d5ff}}h2{{margin:0 0 4px}}h3{{margin:14px 0 4px;font-size:14px;color:#9fb0c8}}section{{background:#1b2130;padding:20px;margin:18px 0;border-radius:12px}}code,pre{{background:#090b10;padding:5px;border-radius:5px;overflow:auto}}.token code{{display:block;margin:10px 0;word-break:break-all}}summary{{cursor:pointer;color:#77d5ff;font-size:14px}}form{{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}}input{{flex:1;min-width:180px;padding:10px;background:#0d1017;color:#e8edf5;border:1px solid #343b4b;border-radius:6px}}button{{padding:10px;background:#168aad;color:white;border:0;border-radius:6px;cursor:pointer}}.danger{{background:#9b2c2c}}.route{{display:flex;align-items:center;gap:8px;flex-wrap:wrap;border-top:1px solid #343b4b;padding-top:6px}}.perigo{{display:flex;gap:8px;border-top:1px solid #343b4b;padding-top:12px;margin-top:12px}}.perigo form{{margin:0}}.estado{{margin:0 0 10px;font-size:14px}}.on{{color:#4ade80}}.off{{color:#f87171}}.erro{{background:#4a1d1d;border:1px solid #9b2c2c;padding:12px;border-radius:8px}}</style><h1>cf-p</h1>{aviso}<p>Configuração ativa. Alterações são salvas no YAML e os clientes reconectam automaticamente.</p><form method=post action=/clients><input name=name placeholder='nome do cliente, ex.: bananapi'><button>Novo cliente + token</button></form>{cards}</html>"#
+        r#"<!doctype html><html lang=pt-br><meta charset=utf-8><meta name=viewport content="width=device-width"><title>cf-p</title><link rel=icon href="{FAVICON}"><style>body{{font:16px system-ui;max-width:900px;margin:40px auto;padding:0 16px;background:#10131a;color:#e8edf5}}h1{{color:#77d5ff}}h2{{margin:0 0 4px}}h3{{margin:14px 0 4px;font-size:14px;color:#9fb0c8}}section{{background:#1b2130;padding:20px;margin:18px 0;border-radius:12px}}code,pre{{background:#090b10;padding:5px;border-radius:5px;overflow:auto}}.token code{{display:block;margin:10px 0;word-break:break-all}}summary{{cursor:pointer;color:#77d5ff;font-size:14px}}form{{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}}input{{flex:1;min-width:180px;padding:10px;background:#0d1017;color:#e8edf5;border:1px solid #343b4b;border-radius:6px}}button{{padding:10px;background:#168aad;color:white;border:0;border-radius:6px;cursor:pointer}}.danger{{background:#9b2c2c}}.route{{display:flex;align-items:center;gap:8px;flex-wrap:wrap;border-top:1px solid #343b4b;padding-top:6px}}.perigo{{display:flex;gap:8px;border-top:1px solid #343b4b;padding-top:12px;margin-top:12px}}.perigo form{{margin:0}}.estado{{margin:0 0 10px;font-size:14px}}.on{{color:#4ade80}}.off{{color:#f87171}}.erro{{background:#4a1d1d;border:1px solid #9b2c2c;padding:12px;border-radius:8px}}</style><h1>cf-p</h1>{aviso}<p>Configuração ativa. Alterações são salvas no YAML e os clientes reconectam automaticamente.</p><form method=post action=/clients><input name=name placeholder='nome do cliente, ex.: bananapi'><button>Novo cliente + token</button></form>{cards}</html>"#
     )
 }
 
