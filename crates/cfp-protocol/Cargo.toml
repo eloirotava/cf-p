@@ -6,3 +6,7 @@ license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+# A ponte entre socket local e stream do tunel mora aqui para existir uma
+# implementacao so do controle de fluxo. As features sao um subconjunto do que
+# cliente e servidor ja habilitam, entao nada novo entra no binario.
+tokio = { version = "1", default-features = false, features = ["io-util", "net", "rt", "sync"] }

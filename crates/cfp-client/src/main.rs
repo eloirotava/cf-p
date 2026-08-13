@@ -1,17 +1,9 @@
-use std::{
-    collections::HashMap,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use cfp_protocol::*;
 use futures_util::{SinkExt, StreamExt};
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::TcpStream,
-    sync::{Mutex, mpsc},
-};
+use tokio::{net::TcpStream, sync::mpsc};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{info, warn};
 
@@ -35,8 +27,6 @@ impl Args {
 fn var(nome: &str) -> Result<String> {
     std::env::var(nome).with_context(|| format!("defina a variavel de ambiente {nome}"))
 }
-
-type Streams = Arc<Mutex<HashMap<u32, mpsc::Sender<Vec<u8>>>>>;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
@@ -89,7 +79,7 @@ async fn run(args: &Args) -> Result<()> {
     }
     info!("tunel autenticado");
 
-    let (out_tx, mut out_rx) = mpsc::channel::<Frame>(256);
+    let (out_tx, mut out_rx) = mpsc::channel::<Frame>(FILA_SESSAO);
     let write_task = tokio::spawn(async move {
         while let Some(frame) = out_rx.recv().await {
             writer.send(Message::Binary(frame.encode().into())).await?;
@@ -107,12 +97,27 @@ async fn run(args: &Args) -> Result<()> {
         match frame.kind {
             OPEN => open_stream(frame, out_tx.clone(), streams.clone()).await,
             DATA => {
-                if let Some(tx) = streams.lock().await.get(&frame.stream_id).cloned() {
-                    let _ = tx.send(frame.payload).await;
+                let id = frame.stream_id;
+                // Nada aqui espera: um stream lento nao pode mais parar a
+                // leitura da sessao inteira. Estourar a janela e violacao de
+                // protocolo, e derrubar a sessao e melhor que acumular.
+                if let Some(state) = streams.lock().await.get(&id) {
+                    state
+                        .receber(frame.payload)
+                        .with_context(|| format!("stream {id}"))?;
+                }
+            }
+            WINDOW_UPDATE => {
+                if let Some(valor) = frame.valor_credito() {
+                    if let Some(state) = streams.lock().await.get(&frame.stream_id) {
+                        state.creditar(valor);
+                    }
                 }
             }
             CLOSE => {
-                streams.lock().await.remove(&frame.stream_id);
+                if let Some(state) = streams.lock().await.remove(&frame.stream_id) {
+                    state.encerrar();
+                }
             }
             _ => {}
         }
@@ -129,37 +134,10 @@ async fn open_stream(frame: Frame, out: mpsc::Sender<Frame>, streams: Streams) {
     let id = frame.stream_id;
     match TcpStream::connect(&target).await {
         Ok(stream) => {
-            let (mut read, mut write) = stream.into_split();
-            let (tx, mut rx) = mpsc::channel::<Vec<u8>>(64);
-            streams.lock().await.insert(id, tx);
+            // OPEN_OK antes da ponte: `out` preserva ordem, entao o servidor
+            // nunca ve DATA de um stream que ele ainda considera abrindo.
             let _ = out.send(Frame::new(OPEN_OK, id, [])).await;
-            let out_read = out.clone();
-            tokio::spawn(async move {
-                let mut buffer = vec![0; 16 * 1024];
-                loop {
-                    match read.read(&mut buffer).await {
-                        Ok(0) | Err(_) => break,
-                        Ok(n) => {
-                            if out_read
-                                .send(Frame::new(DATA, id, &buffer[..n]))
-                                .await
-                                .is_err()
-                            {
-                                break;
-                            }
-                        }
-                    }
-                }
-                let _ = out_read.send(Frame::new(CLOSE, id, [])).await;
-            });
-            tokio::spawn(async move {
-                while let Some(data) = rx.recv().await {
-                    if write.write_all(&data).await.is_err() {
-                        break;
-                    }
-                }
-                let _ = write.shutdown().await;
-            });
+            bridge(stream, id, out, streams, Vec::new()).await;
         }
         Err(error) => {
             let _ = out

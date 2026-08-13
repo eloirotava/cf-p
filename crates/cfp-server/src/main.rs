@@ -20,7 +20,7 @@ use sha2::{Digest, Sha256};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
-    sync::{Mutex, RwLock, mpsc, watch},
+    sync::{RwLock, mpsc, watch},
 };
 use tokio_tungstenite::{accept_async, tungstenite::Message};
 use tracing::{error, info, warn};
@@ -67,7 +67,6 @@ struct AdminConfig {
     username: String,
     password: String,
 }
-type Streams = Arc<Mutex<HashMap<u32, mpsc::Sender<Vec<u8>>>>>;
 type DomainRoutes = Arc<RwLock<HashMap<String, DomainRoute>>>;
 /// Ultimo estado conhecido de cada cliente, indexado por `token_sha256`.
 type Presencas = Arc<RwLock<HashMap<String, Presenca>>>;
@@ -205,7 +204,7 @@ where
         .send(Message::Binary(Frame::new(AUTH_OK, 0, []).encode().into()))
         .await?;
 
-    let (out_tx, mut out_rx) = mpsc::channel::<Frame>(256);
+    let (out_tx, mut out_rx) = mpsc::channel::<Frame>(FILA_SESSAO);
     let streams: Streams = Default::default();
     static NEXT_SESSION: AtomicU64 = AtomicU64::new(1);
     let session_id = NEXT_SESSION.fetch_add(1, Ordering::Relaxed);
@@ -279,12 +278,27 @@ where
         let frame = Frame::decode(&message.into_data())?;
         match frame.kind {
             DATA => {
-                if let Some(tx) = streams.lock().await.get(&frame.stream_id).cloned() {
-                    let _ = tx.send(frame.payload).await;
+                let id = frame.stream_id;
+                // Nada aqui espera: um stream lento nao pode mais parar a
+                // leitura da sessao inteira. Estourar a janela e violacao de
+                // protocolo, e derrubar a sessao e melhor que acumular.
+                if let Some(state) = streams.lock().await.get(&id) {
+                    state
+                        .receber(frame.payload)
+                        .with_context(|| format!("stream {id}"))?;
+                }
+            }
+            WINDOW_UPDATE => {
+                if let Some(valor) = frame.valor_credito() {
+                    if let Some(state) = streams.lock().await.get(&frame.stream_id) {
+                        state.creditar(valor);
+                    }
                 }
             }
             CLOSE | OPEN_ERROR => {
-                streams.lock().await.remove(&frame.stream_id);
+                if let Some(state) = streams.lock().await.remove(&frame.stream_id) {
+                    state.encerrar();
+                }
             }
             _ => {}
         }
@@ -335,41 +349,13 @@ async fn bridge_public(
     streams: Streams,
     initial_data: Vec<u8>,
 ) {
-    let (mut read, mut write) = stream.into_split();
-    let (tx, mut rx) = mpsc::channel::<Vec<u8>>(64);
-    streams.lock().await.insert(id, tx);
+    // OPEN antes da ponte: `out` preserva ordem, entao o cliente nunca ve DATA
+    // de um stream que ele ainda nem sabe que existe. Os headers ja lidos pelo
+    // roteador HTTP entram como `inicial` e gastam credito como qualquer byte.
     if out.send(Frame::new(OPEN, id, target)).await.is_err() {
         return;
     }
-    if !initial_data.is_empty() && out.send(Frame::new(DATA, id, initial_data)).await.is_err() {
-        return;
-    }
-    let out_read = out.clone();
-    tokio::spawn(async move {
-        let mut buffer = vec![0; 16 * 1024];
-        loop {
-            match read.read(&mut buffer).await {
-                Ok(0) | Err(_) => break,
-                Ok(n) => {
-                    if out_read
-                        .send(Frame::new(DATA, id, &buffer[..n]))
-                        .await
-                        .is_err()
-                    {
-                        break;
-                    }
-                }
-            }
-        }
-        let _ = out_read.send(Frame::new(CLOSE, id, [])).await;
-    });
-    tokio::spawn(async move {
-        while let Some(data) = rx.recv().await {
-            if write.write_all(&data).await.is_err() {
-                break;
-            }
-        }
-    });
+    bridge(stream, id, out, streams, initial_data).await;
 }
 
 async fn serve_http(listener: TcpListener, domains: DomainRoutes) {
