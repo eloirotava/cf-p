@@ -12,13 +12,12 @@ clap.workspace = true
 futures-util.workspace = true
 hex.workspace = true
 rand.workspace = true
-rustls.workspace = true
-rustls-pemfile.workspace = true
 serde.workspace = true
 serde_yaml.workspace = true
 sha2.workspace = true
 tokio.workspace = true
-tokio-rustls.workspace = true
-tokio-tungstenite.workspace = true
+# O servidor so aceita conexoes; quem termina TLS e o proxy reverso.
+# Sem feature de TLS o binario cai de 4,5 MB para 1,6 MB.
+tokio-tungstenite = { version = "0.27", default-features = false, features = ["handshake"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true

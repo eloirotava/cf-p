@@ -1,7 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     fs::{self, File},
-    io::{BufReader, Write},
+    io::Write,
     path::{Path, PathBuf},
     sync::{
         Arc,
@@ -15,7 +15,6 @@ use cfp_protocol::*;
 use clap::Parser;
 use futures_util::{SinkExt, StreamExt};
 use rand::RngCore;
-use rustls::ServerConfig;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::{
@@ -23,7 +22,6 @@ use tokio::{
     net::{TcpListener, TcpStream},
     sync::{Mutex, RwLock, mpsc, watch},
 };
-use tokio_rustls::TlsAcceptor;
 use tokio_tungstenite::{accept_async, tungstenite::Message};
 use tracing::{error, info, warn};
 
@@ -47,8 +45,6 @@ struct Config {
     listen: String,
     #[serde(default = "default_http_listen")]
     http_listen: String,
-    cert: Option<String>,
-    key: Option<String>,
     admin: Option<AdminConfig>,
     clients: Vec<Client>,
 }
@@ -88,13 +84,8 @@ async fn main() -> Result<()> {
     let config_path = PathBuf::from(Args::parse().config);
     let cfg: Config = serde_yaml::from_reader(File::open(&config_path)?)?;
     validate_config(&cfg)?;
-    let acceptor = match (&cfg.cert, &cfg.key) {
-        (Some(cert), Some(key)) => Some(TlsAcceptor::from(Arc::new(tls_config(cert, key)?))),
-        (None, None) => None,
-        _ => anyhow::bail!("cert e key devem ser configurados juntos"),
-    };
     let listener = TcpListener::bind(&cfg.listen).await?;
-    info!(listen = %cfg.listen, tls = acceptor.is_some(), "servidor iniciado");
+    info!(listen = %cfg.listen, "servidor iniciado");
     let clients = Arc::new(RwLock::new(cfg.clients.clone()));
     let (reload_tx, reload_rx) = watch::channel(0_u64);
     if let Some(admin) = cfg.admin.clone() {
@@ -114,28 +105,15 @@ async fn main() -> Result<()> {
     tokio::spawn(serve_http(http_listener, domains.clone()));
     loop {
         let (tcp, peer) = listener.accept().await?;
-        let acceptor = acceptor.clone();
         let clients = clients.clone();
         let reload = session_reload(&reload_rx);
         let domains = domains.clone();
         tokio::spawn(async move {
-            let result = match acceptor {
-                Some(acceptor) => {
-                    async {
-                        let tls = acceptor.accept(tcp).await?;
-                        let ws = accept_async(tls).await?;
-                        serve(ws, clients, domains, reload).await
-                    }
-                    .await
-                }
-                None => {
-                    async {
-                        let ws = accept_async(tcp).await?;
-                        serve(ws, clients, domains, reload).await
-                    }
-                    .await
-                }
-            };
+            let result = async {
+                let ws = accept_async(tcp).await?;
+                serve(ws, clients, domains, reload).await
+            }
+            .await;
             if let Err(error) = result {
                 warn!(%peer, %error, "sessao encerrada");
             }
@@ -740,16 +718,6 @@ fn validate_config(config: &Config) -> Result<()> {
     Ok(())
 }
 
-fn tls_config(cert: &str, key: &str) -> Result<ServerConfig> {
-    let certs = rustls_pemfile::certs(&mut BufReader::new(File::open(cert)?))
-        .collect::<std::io::Result<Vec<_>>>()?;
-    let key = rustls_pemfile::private_key(&mut BufReader::new(File::open(key)?))?
-        .context("chave privada ausente")?;
-    Ok(ServerConfig::builder()
-        .with_no_client_auth()
-        .with_single_cert(certs, key)?)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -778,8 +746,6 @@ mod tests {
         let mut config = Config {
             listen: "127.0.0.1:444".into(),
             http_listen: "127.0.0.1:445".into(),
-            cert: None,
-            key: None,
             admin: None,
             clients: vec![
                 client(&token, "b.rotava.com"),

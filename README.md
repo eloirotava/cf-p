@@ -260,9 +260,7 @@ antes de considerar o agente pronto para ambientes não controlados.
 `server.yaml`:
 
 ```yaml
-listen: ":443"
-cert: "/etc/letsencrypt/live/tunnel.exemplo.com/fullchain.pem"
-key: "/etc/letsencrypt/live/tunnel.exemplo.com/privkey.pem"
+listen: "127.0.0.1:444"
 
 clients:
   - token_sha256: "SHA256_HEXADECIMAL_DO_TOKEN"
@@ -291,7 +289,7 @@ Execução:
 
 ```bash
 cp server.example.yaml server.yaml
-# edite certificado, chave e token_sha256
+# edite token_sha256
 cargo build --release
 sudo ./target/release/cfp-server --config server.yaml
 CFP_SERVER=wss://tunnel.exemplo.com CFP_TOKEN="$TOKEN" \
@@ -378,7 +376,7 @@ novo token, substitua o hash no servidor e descarte imediatamente o anterior.
 
 ### Certificado para `a.rotava.com`
 
-#### Com Caddy já instalado (recomendado)
+#### Com Caddy (ou qualquer proxy reverso)
 
 Sim: Caddy pode continuar atendendo todos os sites em `:443` e terminar o TLS
 do túnel. Reserve `a.rotava.com` para o agente e adicione ao `Caddyfile`:
@@ -426,34 +424,18 @@ funcionando.
 
 #### Sem Caddy
 
-Primeiro, crie no DNS um registro `A` para `a.rotava.com` apontando para o IPv4
-da VPS (e um `AAAA` somente se a VPS aceitar IPv6). Para emitir com Let's
-Encrypt, instale o `certbot`, libere temporariamente `80/tcp` e execute:
+O `cfp-server` **não termina TLS**: ele fala WebSocket em texto claro no
+loopback e depende de um proxy reverso na frente. Qualquer proxy serve — nginx,
+Traefik, HAProxy, ou `stunnel` se não houver proxy HTTP na máquina —, desde que
+encaminhe o upgrade WebSocket. O certificado é sempre externo: Let's Encrypt,
+CA corporativa ou wildcard comprado, carregado por quem termina o TLS.
 
-```bash
-sudo EMAIL=admin@rotava.com \
-  ./scripts/setup-certificate.sh letsencrypt
-```
+Antes de qualquer coisa, crie no DNS um registro `A` para `a.rotava.com`
+apontando para o IPv4 da VPS (e um `AAAA` somente se a VPS aceitar IPv6).
 
-O script usa `a.rotava.com` como padrão e grava os arquivos em
-`/etc/letsencrypt/live/a.rotava.com/`. É possível trocar o nome com
-`DOMAIN=outro.rotava.com`. Para testar a emissão sem consumir limites, use
-`STAGING=1`.
-
-Para desenvolvimento local, sem DNS público:
-
-```bash
-sudo ./scripts/setup-certificate.sh self-signed
-```
-
-Esse modo grava em `/etc/cfp/tls` por padrão. Um certificado autoassinado não é
-aceito automaticamente pelo cliente: o certificado precisa ser instalado como
-confiável na máquina cliente. Por isso, para a VPS pública, Let's Encrypt é o
-caminho recomendado.
-
-> O MVP implementado encaminha portas TCP. O reverse proxy HTTP por hostname,
-> heartbeat, `WINDOW_UPDATE`, validação de path do WebSocket e hot reload são os
-> próximos passos; ainda não devem ser considerados disponíveis.
+Um certificado autoassinado não é aceito automaticamente pelo cliente: ele
+precisa ser instalado como confiável na máquina cliente. Para VPS pública,
+Let's Encrypt pelo próprio proxy é o caminho mais simples.
 
 ### Teste ponta a ponta com uma terceira máquina
 
