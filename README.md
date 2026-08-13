@@ -239,10 +239,9 @@ desativa a interface.
 O túnel não transforma automaticamente qualquer porta da rede privada em uma
 porta pública. Ele encaminha somente as rotas TCP cadastradas para aquele token,
 e o processo cliente ainda precisa ter permissão e conectividade até o `target`.
-Rotas UDP usam o prefixo `udp://` nos dois lados. Como o cliente atualmente
-confia nos destinos enviados pelo servidor, comprometer a VPS ou o painel pode
-dar acesso TCP ou UDP com os mesmos
-privilégios de rede do processo cliente. Execute-o com usuário restrito e
+Como o cliente confia nos destinos enviados pelo servidor, comprometer a VPS ou
+o painel pode dar acesso TCP com os mesmos privilégios de rede do processo
+cliente. Execute-o com usuário restrito e
 proteja rigorosamente a administração; uma allowlist local no agente continua
 planejada antes de uso em redes não controladas.
 
@@ -253,29 +252,6 @@ o upgrade WebSocket, limitar conexões longas ou usar inspeção TLS em disposit
 administrados. Portanto, o projeto oferece transporte web compatível; não é uma
 garantia de contornar firewalls nem deve ser usado para contrariar políticas da
 rede.
-
-### Encaminhamento UDP
-
-UDP pode ser publicado explicitamente, embora continue viajando dentro do WSS
-sobre TCP:
-
-```yaml
-- listen: "udp://0.0.0.0:5353"
-  target: "udp://127.0.0.1:53"
-```
-
-Cada origem UDP pública recebe um stream lógico, e cada datagrama ocupa um frame
-`DATA`, preservando seus limites. Associações ociosas expiram depois de 60
-segundos e cada rota aceita no máximo 1024 origens simultâneas. A porta UDP deve
-ser liberada no firewall da VPS.
-
-Isso é útil para DNS, syslog, telemetria e testes simples, mas não reproduz as
-características naturais do UDP: perda de um segmento TCP bloqueia todos os
-datagramas posteriores (head-of-line blocking), retransmissões aumentam latência
-e todos os fluxos dividem a mesma conexão. Não é recomendado para jogos, mídia
-em tempo real, QUIC ou cargas sensíveis a jitter. Também não é UDP transparente
-em nível IP: o serviço privado enxerga como origem o socket criado pelo
-`cfp-client`, não o endereço original da internet.
 
 O servidor é a fonte de verdade das rotas. Neste MVP o token seleciona as rotas
 e destinos definidos na VPS; uma allowlist local no cliente será adicionada
@@ -662,7 +638,7 @@ alteração de headers ou fallback confiável para clientes sem SNI.
 ## Estado do MVP
 
 Já implementado: workspace Rust, WSS, autenticação, reconexão, multiplexação,
-encaminhamento TCP, encaminhamento UDP, roteamento HTTP por hostname e painel de
+encaminhamento TCP, roteamento HTTP por hostname e painel de
 administração com recarga automática do `server.yaml`.
 
 Próximos passos: heartbeat (`PING`/`PONG`), controle de fluxo explícito

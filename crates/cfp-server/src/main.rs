@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    net::{TcpListener, TcpStream, UdpSocket},
+    net::{TcpListener, TcpStream},
     sync::{Mutex, RwLock, mpsc, watch},
 };
 use tokio_rustls::TlsAcceptor;
@@ -204,15 +204,7 @@ where
     let session_id = NEXT_SESSION.fetch_add(1, Ordering::Relaxed);
     let mut route_tasks = Vec::new();
     for route in client.routes {
-        if route.listen.starts_with("udp://") {
-            let tx = out_tx.clone();
-            let streams = streams.clone();
-            route_tasks.push(tokio::spawn(async move {
-                if let Err(e) = udp_route_listener(route, tx, streams).await {
-                    error!(%e, "rota UDP parou");
-                }
-            }));
-        } else if route.listen.parse::<std::net::SocketAddr>().is_ok() {
+        if route.listen.parse::<std::net::SocketAddr>().is_ok() {
             let tx = out_tx.clone();
             let streams = streams.clone();
             route_tasks.push(tokio::spawn(async move {
@@ -281,76 +273,6 @@ where
         .retain(|_, route| route.session_id != session_id);
     write_task.abort();
     Ok(())
-}
-
-async fn udp_route_listener(
-    route: Route,
-    out: mpsc::Sender<Frame>,
-    streams: Streams,
-) -> Result<()> {
-    const IDLE: std::time::Duration = std::time::Duration::from_secs(60);
-    const MAX_PEERS: usize = 1024;
-    static NEXT_ID: AtomicU32 = AtomicU32::new(2_000_000);
-    let listen = route
-        .listen
-        .strip_prefix("udp://")
-        .context("listen UDP invalido")?;
-    let target = route
-        .target
-        .strip_prefix("udp://")
-        .context("target de rota UDP deve comecar com udp://")?;
-    let socket = Arc::new(UdpSocket::bind(listen).await?);
-    let peers = Arc::new(Mutex::new(HashMap::<
-        std::net::SocketAddr,
-        (u32, mpsc::Sender<()>),
-    >::new()));
-    info!(%listen, %target, "rota UDP ativa");
-    let mut buffer = vec![0; 65_507];
-    loop {
-        let (n, peer) = socket.recv_from(&mut buffer).await?;
-        let existing = peers.lock().await.get(&peer).cloned();
-        let id = if let Some((id, activity)) = existing {
-            let _ = activity.try_send(());
-            id
-        } else {
-            let mut peers_guard = peers.lock().await;
-            if peers_guard.len() >= MAX_PEERS {
-                warn!(%peer, "limite de peers UDP atingido");
-                continue;
-            }
-            let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-            let (tx, mut rx) = mpsc::channel::<Vec<u8>>(64);
-            let (activity_tx, mut activity_rx) = mpsc::channel::<()>(1);
-            streams.lock().await.insert(id, tx);
-            peers_guard.insert(peer, (id, activity_tx));
-            drop(peers_guard);
-            out.send(Frame::new(OPEN, id, format!("udp://{target}")))
-                .await?;
-            let socket_out = socket.clone();
-            let peers_out = peers.clone();
-            let streams_out = streams.clone();
-            let out_close = out.clone();
-            tokio::spawn(async move {
-                loop {
-                    let idle = tokio::time::sleep(IDLE);
-                    tokio::pin!(idle);
-                    tokio::select! {
-                        datagram = rx.recv() => match datagram {
-                            Some(datagram) => if socket_out.send_to(&datagram, peer).await.is_err() { break; },
-                            None => break,
-                        },
-                        activity = activity_rx.recv() => if activity.is_none() { break; },
-                        _ = &mut idle => break,
-                    }
-                }
-                peers_out.lock().await.remove(&peer);
-                streams_out.lock().await.remove(&id);
-                let _ = out_close.send(Frame::new(CLOSE, id, [])).await;
-            });
-            id
-        };
-        out.send(Frame::new(DATA, id, &buffer[..n])).await?;
-    }
 }
 
 async fn route_listener(route: Route, out: mpsc::Sender<Frame>, streams: Streams) -> Result<()> {
@@ -722,7 +644,7 @@ fn render_admin(cfg: &Config, token: Option<&str>) -> String {
         for (ri, route) in client.routes.iter().enumerate() {
             cards.push_str(&format!("<div class=route><code>{}</code> → <code>{}</code><form method=post action=/delete-route><input type=hidden name=client value={ci}><input type=hidden name=route value={ri}><button class=danger>Excluir</button></form></div>", escape(&route.listen), escape(&route.target)));
         }
-        cards.push_str(&format!("<form method=post action=/routes><input type=hidden name=client value={ci}><input name=listen required placeholder='b.rotava.com, 0.0.0.0:33890 ou udp://0.0.0.0:5353'><input name=target required placeholder='127.0.0.1:3000 ou udp://127.0.0.1:53'><button>Adicionar rota</button></form></section>"));
+        cards.push_str(&format!("<form method=post action=/routes><input type=hidden name=client value={ci}><input name=listen required placeholder='b.rotava.com ou 0.0.0.0:33890'><input name=target required placeholder='127.0.0.1:3000'><button>Adicionar rota</button></form></section>"));
     }
     let server = cfg
         .admin
@@ -802,18 +724,7 @@ fn validate_config(config: &Config) -> Result<()> {
             anyhow::bail!("token_sha256 duplicado no server.yaml");
         }
         for route in &client.routes {
-            let listener = if let Some(address) = route.listen.strip_prefix("udp://") {
-                address
-                    .parse::<std::net::SocketAddr>()
-                    .with_context(|| format!("listen UDP invalido: {}", route.listen))?;
-                if !route.target.starts_with("udp://") {
-                    anyhow::bail!("target de rota UDP deve comecar com udp://");
-                }
-                if route.target.trim_start_matches("udp://").is_empty() {
-                    anyhow::bail!("target UDP vazio");
-                }
-                route.listen.to_ascii_lowercase()
-            } else if route.listen.parse::<std::net::SocketAddr>().is_ok() {
+            let listener = if route.listen.parse::<std::net::SocketAddr>().is_ok() {
                 route.listen.clone()
             } else {
                 normalize_hostname(&route.listen)
@@ -914,23 +825,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn validates_udp_routes() {
-        let config = |target: &str| Config {
-            listen: "127.0.0.1:444".into(),
-            http_listen: "127.0.0.1:445".into(),
-            cert: None,
-            key: None,
-            admin: None,
-            clients: vec![Client {
-                token_sha256: "a".repeat(64),
-                routes: vec![Route {
-                    listen: "udp://0.0.0.0:5353".into(),
-                    target: target.into(),
-                }],
-            }],
-        };
-        assert!(validate_config(&config("udp://127.0.0.1:53")).is_ok());
-        assert!(validate_config(&config("127.0.0.1:53")).is_err());
-    }
 }

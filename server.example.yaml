@@ -19,6 +19,3 @@ clients:
       # O valor sem porta é interpretado como hostname HTTP.
       - listen: "b.rotava.com"
         target: "127.0.0.1:3000"
-      # UDP também é suportado, preservando um datagrama por frame WebSocket.
-      - listen: "udp://0.0.0.0:5353"
-        target: "udp://127.0.0.1:53"

@@ -10,7 +10,7 @@ use clap::Parser;
 use futures_util::{SinkExt, StreamExt};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    net::{TcpStream, UdpSocket, lookup_host},
+    net::TcpStream,
     sync::{Mutex, mpsc},
 };
 use tokio_tungstenite::{connect_async, tungstenite::Message};
@@ -113,10 +113,6 @@ async fn open_stream(frame: Frame, out: mpsc::Sender<Frame>, streams: Streams) {
         Err(_) => return,
     };
     let id = frame.stream_id;
-    if let Some(target) = target.strip_prefix("udp://") {
-        open_udp(id, target, out, streams).await;
-        return;
-    }
     match TcpStream::connect(&target).await {
         Ok(stream) => {
             let (mut read, mut write) = stream.into_split();
@@ -159,55 +155,3 @@ async fn open_stream(frame: Frame, out: mpsc::Sender<Frame>, streams: Streams) {
     }
 }
 
-async fn open_udp(id: u32, target: &str, out: mpsc::Sender<Frame>, streams: Streams) {
-    let result = async {
-        let target = lookup_host(target)
-            .await?
-            .next()
-            .context("destino UDP invalido")?;
-        let bind = if target.is_ipv6() {
-            "[::]:0"
-        } else {
-            "0.0.0.0:0"
-        };
-        let socket = Arc::new(UdpSocket::bind(bind).await?);
-        socket.connect(target).await?;
-        anyhow::Ok(socket)
-    }
-    .await;
-    let socket = match result {
-        Ok(socket) => socket,
-        Err(error) => {
-            let _ = out
-                .send(Frame::new(OPEN_ERROR, id, error.to_string()))
-                .await;
-            return;
-        }
-    };
-    let (tx, mut rx) = mpsc::channel::<Vec<u8>>(64);
-    streams.lock().await.insert(id, tx);
-    let _ = out.send(Frame::new(OPEN_OK, id, [])).await;
-    let reader = socket.clone();
-    let out_read = out.clone();
-    let reader_task = tokio::spawn(async move {
-        let mut buffer = vec![0; 65_507];
-        while let Ok(n) = reader.recv(&mut buffer).await {
-            if out_read
-                .send(Frame::new(DATA, id, &buffer[..n]))
-                .await
-                .is_err()
-            {
-                break;
-            }
-        }
-        let _ = out_read.send(Frame::new(CLOSE, id, [])).await;
-    });
-    tokio::spawn(async move {
-        while let Some(datagram) = rx.recv().await {
-            if socket.send(&datagram).await.is_err() {
-                break;
-            }
-        }
-        reader_task.abort();
-    });
-}
