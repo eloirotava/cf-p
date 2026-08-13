@@ -69,6 +69,18 @@ struct AdminConfig {
 }
 type Streams = Arc<Mutex<HashMap<u32, mpsc::Sender<Vec<u8>>>>>;
 type DomainRoutes = Arc<RwLock<HashMap<String, DomainRoute>>>;
+/// Ultimo estado conhecido de cada cliente, indexado por `token_sha256`.
+type Presencas = Arc<RwLock<HashMap<String, Presenca>>>;
+/// Geracao de configuracao por cliente. Uma sessao so reconecta quando a
+/// geracao do proprio token muda, entao mexer num cliente nao derruba os outros.
+type Geracoes = Arc<HashMap<String, u64>>;
+
+struct Presenca {
+    conectado: bool,
+    desde: std::time::SystemTime,
+    peer: String,
+    session_id: u64,
+}
 
 #[derive(Clone)]
 struct DomainRoute {
@@ -99,7 +111,8 @@ async fn main() -> Result<()> {
     let listener = TcpListener::bind(&cfg.listen).await?;
     info!(listen = %cfg.listen, "servidor iniciado");
     let clients = Arc::new(RwLock::new(cfg.clients.clone()));
-    let (reload_tx, reload_rx) = watch::channel(0_u64);
+    let presencas: Presencas = Default::default();
+    let (reload_tx, reload_rx) = watch::channel(Geracoes::default());
     if let Some(admin) = cfg.admin.clone() {
         let listener = TcpListener::bind(&admin.listen).await?;
         info!(listen = %admin.listen, "painel administrativo iniciado");
@@ -108,6 +121,7 @@ async fn main() -> Result<()> {
             admin,
             config_path,
             clients.clone(),
+            presencas.clone(),
             reload_tx.clone(),
         ));
     }
@@ -120,10 +134,11 @@ async fn main() -> Result<()> {
         let clients = clients.clone();
         let reload = session_reload(&reload_rx);
         let domains = domains.clone();
+        let presencas = presencas.clone();
         tokio::spawn(async move {
             let result = async {
                 let ws = accept_async(tcp).await?;
-                serve(ws, clients, domains, reload).await
+                serve(ws, peer.to_string(), clients, domains, presencas, reload).await
             }
             .await;
             if let Err(error) = result {
@@ -141,7 +156,7 @@ async fn main() -> Result<()> {
 /// `changed()` retornaria imediatamente e derrubaria o cliente logo apos o
 /// AUTH_OK, num laco infinito de reconexao. Marcado aqui, cada sessao so
 /// reage as alteracoes de configuracao posteriores a ela.
-fn session_reload(master: &watch::Receiver<u64>) -> watch::Receiver<u64> {
+fn session_reload(master: &watch::Receiver<Geracoes>) -> watch::Receiver<Geracoes> {
     let mut reload = master.clone();
     reload.mark_unchanged();
     reload
@@ -149,9 +164,11 @@ fn session_reload(master: &watch::Receiver<u64>) -> watch::Receiver<u64> {
 
 async fn serve<S>(
     ws: tokio_tungstenite::WebSocketStream<S>,
+    peer: String,
     clients: Arc<RwLock<Vec<Client>>>,
     domains: DomainRoutes,
-    mut reload: watch::Receiver<u64>,
+    presencas: Presencas,
+    mut reload: watch::Receiver<Geracoes>,
 ) -> Result<()>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
@@ -192,6 +209,16 @@ where
     let streams: Streams = Default::default();
     static NEXT_SESSION: AtomicU64 = AtomicU64::new(1);
     let session_id = NEXT_SESSION.fetch_add(1, Ordering::Relaxed);
+    let minha_geracao = reload.borrow().get(&digest).copied().unwrap_or(0);
+    presencas.write().await.insert(
+        digest.clone(),
+        Presenca {
+            conectado: true,
+            desde: std::time::SystemTime::now(),
+            peer,
+            session_id,
+        },
+    );
     let mut route_tasks = Vec::new();
     for route in client.routes {
         if route.listen.parse::<std::net::SocketAddr>().is_ok() {
@@ -226,8 +253,16 @@ where
         let message = tokio::select! {
             message = reader.next() => message,
             changed = reload.changed() => {
-                if changed.is_ok() { info!(session_id, "configuracao alterada; reconectando cliente"); }
-                break;
+                if changed.is_err() {
+                    break;
+                }
+                // So reconecta se a alteracao foi neste cliente: mexer na rota
+                // de um nao pode derrubar a sessao dos outros.
+                if reload.borrow().get(&digest).copied().unwrap_or(0) != minha_geracao {
+                    info!(session_id, "configuracao deste cliente alterada; reconectando");
+                    break;
+                }
+                continue;
             }
         };
         let Some(message) = message else { break };
@@ -261,6 +296,14 @@ where
         .write()
         .await
         .retain(|_, route| route.session_id != session_id);
+    // Uma sessao antiga que termina depois de o cliente ja ter reconectado nao
+    // pode marcar a nova como desconectada.
+    if let Some(presenca) = presencas.write().await.get_mut(&digest) {
+        if presenca.session_id == session_id {
+            presenca.conectado = false;
+            presenca.desde = std::time::SystemTime::now();
+        }
+    }
     write_task.abort();
     Ok(())
 }
@@ -384,19 +427,23 @@ async fn serve_admin(
     admin: AdminConfig,
     config_path: PathBuf,
     clients: Arc<RwLock<Vec<Client>>>,
-    reload: watch::Sender<u64>,
+    presencas: Presencas,
+    reload: watch::Sender<Geracoes>,
 ) {
     loop {
         match listener.accept().await {
             Ok((stream, peer)) => {
-                let (admin, path, clients, reload) = (
+                let (admin, path, clients, presencas, reload) = (
                     admin.clone(),
                     config_path.clone(),
                     clients.clone(),
+                    presencas.clone(),
                     reload.clone(),
                 );
                 tokio::spawn(async move {
-                    if let Err(error) = handle_admin(stream, admin, path, clients, reload).await {
+                    if let Err(error) =
+                        handle_admin(stream, admin, path, clients, presencas, reload).await
+                    {
                         warn!(%peer, %error, "requisicao administrativa recusada");
                     }
                 });
@@ -411,7 +458,8 @@ async fn handle_admin(
     admin: AdminConfig,
     config_path: PathBuf,
     clients: Arc<RwLock<Vec<Client>>>,
-    reload: watch::Sender<u64>,
+    presencas: Presencas,
+    reload: watch::Sender<Geracoes>,
 ) -> Result<()> {
     let request = read_http_request(&mut stream, 64 * 1024).await?;
     if !basic_auth_ok(&request, &admin) {
@@ -449,8 +497,8 @@ async fn handle_admin(
         let form = parse_form(&request[header_end..]);
         // Erro aqui e culpa do preenchimento, nao do servidor: renderiza o
         // painel com a mensagem em vez de derrubar a conexao sem resposta.
-        let alterado = match aplicar(path, &form, &config_path) {
-            Ok(Some(cfg)) => cfg,
+        let (alterado, afetados) = match aplicar(path, &form, &config_path) {
+            Ok(Some(resultado)) => resultado,
             Ok(None) => {
                 return http_response(
                     &mut stream,
@@ -467,7 +515,7 @@ async fn handle_admin(
                     &mut stream,
                     "422 Unprocessable Content",
                     "text/html; charset=utf-8",
-                    &render_admin(&cfg, Some(&format!("{error:#}"))),
+                    &render_admin(&cfg, Some(&format!("{error:#}")), &*presencas.read().await),
                     &[],
                 )
                 .await;
@@ -475,12 +523,18 @@ async fn handle_admin(
         };
         save_config(&config_path, &alterado)?;
         *clients.write().await = alterado.clients.clone();
-        reload.send_modify(|generation| *generation += 1);
+        reload.send_modify(|geracoes| {
+            let mut novas = HashMap::clone(geracoes);
+            for token in &afetados {
+                *novas.entry(token.clone()).or_default() += 1;
+            }
+            *geracoes = Arc::new(novas);
+        });
         return http_response(
             &mut stream,
             "200 OK",
             "text/html; charset=utf-8",
-            &render_admin(&alterado, None),
+            &render_admin(&alterado, None, &*presencas.read().await),
             &[],
         )
         .await;
@@ -490,7 +544,7 @@ async fn handle_admin(
         &mut stream,
         "200 OK",
         "text/html; charset=utf-8",
-        &render_admin(&cfg, None),
+        &render_admin(&cfg, None, &*presencas.read().await),
         &[],
     )
     .await
@@ -505,9 +559,12 @@ fn aplicar(
     path: &str,
     form: &HashMap<String, String>,
     config_path: &Path,
-) -> Result<Option<Config>> {
-    let form = form;
+) -> Result<Option<(Config, Vec<String>)>> {
     let mut cfg: Config = serde_yaml::from_reader(File::open(config_path)?)?;
+    // `token_sha256` dos clientes cuja sessao precisa cair. Renomear nao entra:
+    // nome e cosmetico e nao justifica derrubar um tunel.
+    let mut afetados: Vec<String> = Vec::new();
+    let mut afetar = |cliente: &Client| afetados.push(cliente.token_sha256.to_ascii_lowercase());
     match path {
             "/clients" => {
                 let mut bytes = [0_u8; 32];
@@ -528,6 +585,7 @@ fn aplicar(
             "/rotate-token" => {
                 let index: usize = field(&form, "client")?.parse()?;
                 let client = cfg.clients.get_mut(index).context("cliente inexistente")?;
+                afetar(client);
                 let mut bytes = [0_u8; 32];
                 rand::rng().fill_bytes(&mut bytes);
                 let token = hex::encode(bytes);
@@ -537,6 +595,7 @@ fn aplicar(
             "/routes" => {
                 let index: usize = field(&form, "client")?.parse()?;
                 let client = cfg.clients.get_mut(index).context("cliente inexistente")?;
+                afetar(client);
                 client.routes.push(Route {
                     name: opcional(&form, "name").into(),
                     listen: field(&form, "listen")?.into(),
@@ -547,6 +606,8 @@ fn aplicar(
                 let client: usize = field(&form, "client")?.parse()?;
                 let index: usize = field(&form, "route")?.parse()?;
                 let (listen, target) = (field(&form, "listen")?, field(&form, "target")?);
+                let alvo = cfg.clients.get(client).context("cliente inexistente")?;
+                afetar(alvo);
                 let route = cfg
                     .clients
                     .get_mut(client)
@@ -561,23 +622,23 @@ fn aplicar(
             "/delete-route" => {
                 let client: usize = field(&form, "client")?.parse()?;
                 let route: usize = field(&form, "route")?.parse()?;
-                cfg.clients
-                    .get_mut(client)
-                    .context("cliente inexistente")?
-                    .routes
-                    .get(route)
-                    .context("rota inexistente")?;
+                let alvo = cfg.clients.get(client).context("cliente inexistente")?;
+                alvo.routes.get(route).context("rota inexistente")?;
+                afetar(alvo);
                 cfg.clients[client].routes.remove(route);
             }
             "/delete-client" => {
                 let index: usize = field(&form, "client")?.parse()?;
-                cfg.clients.get(index).context("cliente inexistente")?;
+                // O cliente removido precisa ser desconectado: sem isso a sessao
+                // aberta continuaria servindo rotas que nao existem mais.
+                afetar(cfg.clients.get(index).context("cliente inexistente")?);
                 cfg.clients.remove(index);
             }
             _ => return Ok(None),
         }
         validate_config(&cfg)?;
-        Ok(Some(cfg))
+        drop(afetar);
+        Ok(Some((cfg, afetados)))
 }
 
 async fn read_http_request(stream: &mut TcpStream, limit: usize) -> Result<Vec<u8>> {
@@ -690,7 +751,26 @@ fn escape(value: &str) -> String {
         .replace('"', "&quot;")
 }
 
-fn render_admin(cfg: &Config, erro: Option<&str>) -> String {
+/// Ha quanto tempo, em texto curto. O painel precisa responder "desde quando",
+/// nao a hora exata, e isso dispensa uma dependencia de formatacao de data.
+fn ha(desde: std::time::SystemTime) -> String {
+    let s = std::time::SystemTime::now()
+        .duration_since(desde)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    match s {
+        0..=59 => format!("{s}s"),
+        60..=3599 => format!("{}min", s / 60),
+        3600..=86399 => format!("{}h", s / 3600),
+        _ => format!("{}d", s / 86400),
+    }
+}
+
+fn render_admin(
+    cfg: &Config,
+    erro: Option<&str>,
+    presencas: &HashMap<String, Presenca>,
+) -> String {
     let server = cfg
         .admin
         .as_ref()
@@ -703,8 +783,21 @@ fn render_admin(cfg: &Config, erro: Option<&str>) -> String {
         } else {
             escape(&client.name)
         };
+        let estado = match presencas.get(&client.token_sha256.to_ascii_lowercase()) {
+            Some(p) if p.conectado => format!(
+                "<p class=estado><b class=on>● conectado</b> há {} — de {}</p>",
+                ha(p.desde),
+                escape(&p.peer)
+            ),
+            Some(p) => format!(
+                "<p class=estado><b class=off>● desconectado</b> há {}</p>",
+                ha(p.desde)
+            ),
+            None => "<p class=estado><b class=off>● nunca conectou</b> desde que o servidor subiu</p>"
+                .to_string(),
+        };
         cards.push_str(&format!(
-            "<section><h2>{titulo}</h2>\
+            "<section><h2>{titulo}</h2>{estado}\
              <form method=post action=/rename-client><input type=hidden name=client value={ci}>\
              <input name=name value=\"{}\" placeholder='nome do cliente, ex.: bananapi'>\
              <button>Renomear</button></form>",
@@ -738,7 +831,8 @@ fn render_admin(cfg: &Config, erro: Option<&str>) -> String {
                  <input name=name value=\"{}\" placeholder='nome do túnel'>\
                  <input name=listen value=\"{}\" required><input name=target value=\"{}\" required>\
                  <button>Salvar</button></form>\
-                 <form method=post action=/delete-route><input type=hidden name=client value={ci}>\
+                 <form method=post action=/delete-route onsubmit=\"return confirm('Excluir esta rota?')\">\
+                 <input type=hidden name=client value={ci}>\
                  <input type=hidden name=route value={ri}><button class=danger>Excluir</button></form></div>",
                 escape(&route.name),
                 escape(&route.listen),
@@ -752,10 +846,11 @@ fn render_admin(cfg: &Config, erro: Option<&str>) -> String {
              <input name=listen required placeholder='b.rotava.com ou 0.0.0.0:33890'>\
              <input name=target required placeholder='127.0.0.1:3000'>\
              <button>Adicionar rota</button></form>\
-             <div class=perigo><form method=post action=/rotate-token>\
+             <div class=perigo><form method=post action=/rotate-token onsubmit=\"return confirm('Gerar novo token? O token atual para de funcionar e o cliente cai até ser reconfigurado.')\">\
              <input type=hidden name=client value={ci}>\
              <button class=danger>Gerar novo token</button></form>\
-             <form method=post action=/delete-client><input type=hidden name=client value={ci}>\
+             <form method=post action=/delete-client onsubmit=\"return confirm('Excluir o cliente, suas rotas e seu token? Não há como desfazer.')\">\
+             <input type=hidden name=client value={ci}>\
              <button class=danger>Excluir cliente</button></form></div></section>"
         ));
     }
@@ -763,7 +858,7 @@ fn render_admin(cfg: &Config, erro: Option<&str>) -> String {
         .map(|e| format!("<p class=erro>{}</p>", escape(e)))
         .unwrap_or_default();
     format!(
-        r#"<!doctype html><html lang=pt-br><meta charset=utf-8><meta name=viewport content="width=device-width"><title>cf-p</title><style>body{{font:16px system-ui;max-width:900px;margin:40px auto;padding:0 16px;background:#10131a;color:#e8edf5}}h1{{color:#77d5ff}}h2{{margin:0 0 4px}}h3{{margin:14px 0 4px;font-size:14px;color:#9fb0c8}}section{{background:#1b2130;padding:20px;margin:18px 0;border-radius:12px}}code,pre{{background:#090b10;padding:5px;border-radius:5px;overflow:auto}}.token code{{display:block;margin:10px 0;word-break:break-all}}summary{{cursor:pointer;color:#77d5ff;font-size:14px}}form{{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}}input{{flex:1;min-width:180px;padding:10px;background:#0d1017;color:#e8edf5;border:1px solid #343b4b;border-radius:6px}}button{{padding:10px;background:#168aad;color:white;border:0;border-radius:6px;cursor:pointer}}.danger{{background:#9b2c2c}}.route{{display:flex;align-items:center;gap:8px;flex-wrap:wrap;border-top:1px solid #343b4b;padding-top:6px}}.perigo{{display:flex;gap:8px;border-top:1px solid #343b4b;padding-top:12px;margin-top:12px}}.perigo form{{margin:0}}.erro{{background:#4a1d1d;border:1px solid #9b2c2c;padding:12px;border-radius:8px}}</style><h1>cf-p</h1>{aviso}<p>Configuração ativa. Alterações são salvas no YAML e os clientes reconectam automaticamente.</p><form method=post action=/clients><input name=name placeholder='nome do cliente, ex.: bananapi'><button>Novo cliente + token</button></form>{cards}</html>"#
+        r#"<!doctype html><html lang=pt-br><meta charset=utf-8><meta name=viewport content="width=device-width"><title>cf-p</title><style>body{{font:16px system-ui;max-width:900px;margin:40px auto;padding:0 16px;background:#10131a;color:#e8edf5}}h1{{color:#77d5ff}}h2{{margin:0 0 4px}}h3{{margin:14px 0 4px;font-size:14px;color:#9fb0c8}}section{{background:#1b2130;padding:20px;margin:18px 0;border-radius:12px}}code,pre{{background:#090b10;padding:5px;border-radius:5px;overflow:auto}}.token code{{display:block;margin:10px 0;word-break:break-all}}summary{{cursor:pointer;color:#77d5ff;font-size:14px}}form{{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}}input{{flex:1;min-width:180px;padding:10px;background:#0d1017;color:#e8edf5;border:1px solid #343b4b;border-radius:6px}}button{{padding:10px;background:#168aad;color:white;border:0;border-radius:6px;cursor:pointer}}.danger{{background:#9b2c2c}}.route{{display:flex;align-items:center;gap:8px;flex-wrap:wrap;border-top:1px solid #343b4b;padding-top:6px}}.perigo{{display:flex;gap:8px;border-top:1px solid #343b4b;padding-top:12px;margin-top:12px}}.perigo form{{margin:0}}.estado{{margin:0 0 10px;font-size:14px}}.on{{color:#4ade80}}.off{{color:#f87171}}.erro{{background:#4a1d1d;border:1px solid #9b2c2c;padding:12px;border-radius:8px}}</style><h1>cf-p</h1>{aviso}<p>Configuração ativa. Alterações são salvas no YAML e os clientes reconectam automaticamente.</p><form method=post action=/clients><input name=name placeholder='nome do cliente, ex.: bananapi'><button>Novo cliente + token</button></form>{cards}</html>"#
     )
 }
 
@@ -932,7 +1027,7 @@ mod tests {
                 .collect()
         };
 
-        let renomeado = aplicar(
+        let (renomeado, afetados) = aplicar(
             "/rename-client",
             &form(&[("client", "0"), ("name", "bananapi")]),
             &path,
@@ -940,6 +1035,21 @@ mod tests {
         .unwrap()
         .unwrap();
         assert_eq!(renomeado.clients[0].name, "bananapi");
+        // Nome e cosmetico: renomear nao pode derrubar o tunel.
+        assert!(afetados.is_empty());
+
+        let (_, afetados) = aplicar(
+            "/routes",
+            &form(&[
+                ("client", "0"),
+                ("listen", "c.rotava.com"),
+                ("target", "127.0.0.1:3"),
+            ]),
+            &path,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(afetados, vec!["a".repeat(64)]);
 
         // O mesmo hostname em outra rota precisa ser recusado, e como erro do
         // formulario -- nao como falha que derruba a conexao sem resposta.
@@ -960,8 +1070,15 @@ mod tests {
 
     #[tokio::test]
     async fn session_ignores_reloads_anteriores_a_ela() {
-        let (tx, master) = watch::channel(0_u64);
-        tx.send_modify(|generation| *generation += 1);
+        let bump = |tx: &watch::Sender<Geracoes>, token: &str| {
+            tx.send_modify(|geracoes| {
+                let mut novas = HashMap::clone(geracoes);
+                *novas.entry(token.to_string()).or_default() += 1;
+                *geracoes = Arc::new(novas);
+            })
+        };
+        let (tx, master) = watch::channel(Geracoes::default());
+        bump(&tx, "meu-token");
 
         let mut reload = session_reload(&master);
         let immediate =
@@ -971,10 +1088,31 @@ mod tests {
             "sessao caiu por alteracao anterior a ela"
         );
 
-        tx.send_modify(|generation| *generation += 1);
+        bump(&tx, "meu-token");
         assert!(
             reload.changed().await.is_ok(),
             "sessao ignorou alteracao posterior"
+        );
+    }
+
+    /// A geracao e por cliente: mexer num nao pode derrubar a sessao do outro.
+    #[tokio::test]
+    async fn geracao_isola_clientes() {
+        let (tx, master) = watch::channel(Geracoes::default());
+        let mut reload = session_reload(&master);
+        let minha = reload.borrow().get("meu-token").copied().unwrap_or(0);
+
+        tx.send_modify(|geracoes| {
+            let mut novas = HashMap::clone(geracoes);
+            *novas.entry("outro-token".to_string()).or_default() += 1;
+            *geracoes = Arc::new(novas);
+        });
+
+        assert!(reload.changed().await.is_ok(), "o watch nao notificou");
+        assert_eq!(
+            reload.borrow().get("meu-token").copied().unwrap_or(0),
+            minha,
+            "alteracao em outro cliente mudou a geracao desta sessao"
         );
     }
 
