@@ -788,6 +788,10 @@ fn render_admin(
     erro: Option<&str>,
     presencas: &HashMap<String, Presenca>,
 ) -> String {
+    // Com poucos clientes, abrir tudo mostra o painel inteiro de uma vez. Com
+    // muitos, o que ajuda e a lista compacta -- que e justamente quando
+    // minimizar deixa de ser conforto e vira a forma de achar alguem.
+    let aberto = if cfg.clients.len() <= 3 { " open" } else { "" };
     let server = cfg
         .admin
         .as_ref()
@@ -795,6 +799,7 @@ fn render_admin(
         .unwrap_or("wss://a.rotava.com");
     let mut cards = String::new();
     for (ci, client) in cfg.clients.iter().enumerate() {
+        let chave = &client.token_sha256[..client.token_sha256.len().min(12)];
         let titulo = if client.name.is_empty() {
             format!("Cliente {}", ci + 1)
         } else {
@@ -802,19 +807,19 @@ fn render_admin(
         };
         let estado = match presencas.get(&client.token_sha256.to_ascii_lowercase()) {
             Some(p) if p.conectado => format!(
-                "<p class=estado><b class=on>● conectado</b> há {} — de {}</p>",
+                "<span class=estado><b class=on>● conectado</b> há {} — de {}</span>",
                 ha(p.desde),
                 escape(&p.peer)
             ),
             Some(p) => format!(
-                "<p class=estado><b class=off>● desconectado</b> há {}</p>",
+                "<span class=estado><b class=off>● desconectado</b> há {}</span>",
                 ha(p.desde)
             ),
-            None => "<p class=estado><b class=off>● nunca conectou</b> desde que o servidor subiu</p>"
-                .to_string(),
+            None => "<span class=estado><b class=off>● nunca conectou</b></span>".to_string(),
         };
         cards.push_str(&format!(
-            "<section><h2>{titulo}</h2>{estado}\
+            "<details class=cliente{aberto} data-k='{chave}'>\
+             <summary><span class=nome>{titulo}</span>{estado}</summary>\
              <form method=post action=/rename-client><input type=hidden name=client value={ci}>\
              <input name=name value=\"{}\" placeholder='nome do cliente, ex.: bananapi'>\
              <button>Renomear</button></form>",
@@ -868,14 +873,23 @@ fn render_admin(
              <button class=danger>Gerar novo token</button></form>\
              <form method=post action=/delete-client onsubmit=\"return confirm('Excluir o cliente, suas rotas e seu token? Não há como desfazer.')\">\
              <input type=hidden name=client value={ci}>\
-             <button class=danger>Excluir cliente</button></form></div></section>"
+             <button class=danger>Excluir cliente</button></form></div></details>"
         ));
     }
     let aviso = erro
         .map(|e| format!("<p class=erro>{}</p>", escape(e)))
         .unwrap_or_default();
     format!(
-        r#"<!doctype html><html lang=pt-br><meta charset=utf-8><meta name=viewport content="width=device-width"><title>cf-p</title><link rel=icon href="{FAVICON}"><style>body{{font:16px system-ui;max-width:900px;margin:40px auto;padding:0 16px;background:#10131a;color:#e8edf5}}h1{{color:#77d5ff}}h2{{margin:0 0 4px}}h3{{margin:14px 0 4px;font-size:14px;color:#9fb0c8}}section{{background:#1b2130;padding:20px;margin:18px 0;border-radius:12px}}code,pre{{background:#090b10;padding:5px;border-radius:5px;overflow:auto}}.token code{{display:block;margin:10px 0;word-break:break-all}}summary{{cursor:pointer;color:#77d5ff;font-size:14px}}form{{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}}input{{flex:1;min-width:180px;padding:10px;background:#0d1017;color:#e8edf5;border:1px solid #343b4b;border-radius:6px}}button{{padding:10px;background:#168aad;color:white;border:0;border-radius:6px;cursor:pointer}}.danger{{background:#9b2c2c}}.route{{display:flex;align-items:center;gap:8px;flex-wrap:wrap;border-top:1px solid #343b4b;padding-top:6px}}.perigo{{display:flex;gap:8px;border-top:1px solid #343b4b;padding-top:12px;margin-top:12px}}.perigo form{{margin:0}}.estado{{margin:0 0 10px;font-size:14px}}.on{{color:#4ade80}}.off{{color:#f87171}}.erro{{background:#4a1d1d;border:1px solid #9b2c2c;padding:12px;border-radius:8px}}</style><h1>cf-p</h1>{aviso}<p>Configuração ativa. Alterações são salvas no YAML e os clientes reconectam automaticamente.</p><form method=post action=/clients><input name=name placeholder='nome do cliente, ex.: bananapi'><button>Novo cliente + token</button></form>{cards}</html>"#
+        r#"<!doctype html><html lang=pt-br><meta charset=utf-8><meta name=viewport content="width=device-width"><title>cf-p</title><link rel=icon href="{FAVICON}"><style>body{{font:16px system-ui;max-width:900px;margin:40px auto;padding:0 16px;background:#10131a;color:#e8edf5}}h1{{color:#77d5ff}}h2{{margin:0 0 4px}}h3{{margin:14px 0 4px;font-size:14px;color:#9fb0c8}}section,details.cliente{{background:#1b2130;padding:20px;margin:18px 0;border-radius:12px}}code,pre{{background:#090b10;padding:5px;border-radius:5px;overflow:auto}}.token code{{display:block;margin:10px 0;word-break:break-all}}summary{{cursor:pointer;color:#77d5ff;font-size:14px}}details.cliente>summary{{color:inherit;font-size:16px;display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;list-style:none}}details.cliente>summary::-webkit-details-marker{{display:none}}details.cliente>summary::before{{content:'▸';color:#77d5ff;font-size:14px}}details.cliente[open]>summary::before{{content:'▾'}}.nome{{font-size:20px;font-weight:600}}details.cliente:not([open])>summary{{margin:0}}form{{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}}input{{flex:1;min-width:180px;padding:10px;background:#0d1017;color:#e8edf5;border:1px solid #343b4b;border-radius:6px}}button{{padding:10px;background:#168aad;color:white;border:0;border-radius:6px;cursor:pointer}}.danger{{background:#9b2c2c}}.route{{display:flex;align-items:center;gap:8px;flex-wrap:wrap;border-top:1px solid #343b4b;padding-top:6px}}.perigo{{display:flex;gap:8px;border-top:1px solid #343b4b;padding-top:12px;margin-top:12px}}.perigo form{{margin:0}}.estado{{margin:0 0 10px;font-size:14px}}.on{{color:#4ade80}}.off{{color:#f87171}}.erro{{background:#4a1d1d;border:1px solid #9b2c2c;padding:12px;border-radius:8px}}</style><h1>cf-p</h1>{aviso}<p>Configuração ativa. Alterações são salvas no YAML e os clientes reconectam automaticamente.</p><form method=post action=/clients><input name=name placeholder='nome do cliente, ex.: bananapi'><button>Novo cliente + token</button></form>{cards}<script>
+// O painel recarrega a pagina inteira a cada acao, entao sem guardar o estado
+// todo cliente voltaria aberto depois de cada Salvar. A chave e o prefixo do
+// hash do token: sobrevive a renomear e a reordenar clientes.
+for (const d of document.querySelectorAll('details.cliente')) {{
+  const k = 'cfp:' + d.dataset.k;
+  if (localStorage.getItem(k) === '0') d.open = false;
+  d.addEventListener('toggle', () => localStorage.setItem(k, d.open ? '1' : '0'));
+}}
+</script></html>"#
     )
 }
 
