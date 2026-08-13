@@ -7,9 +7,10 @@ license.workspace = true
 [dependencies]
 anyhow.workspace = true
 cfp-protocol = { path = "../cfp-protocol" }
-clap.workspace = true
 futures-util.workspace = true
-tokio.workspace = true
+# O cliente e ligado a I/O, nao a CPU: um runtime de thread unica basta e
+# dispensa o agendador multi-thread e o tratamento de sinais.
+tokio = { version = "1", default-features = false, features = ["macros", "net", "rt", "sync", "time", "io-util"] }
 # Além das raízes públicas embutidas, carrega o trust store nativo. No Windows
 # isso inclui CAs corporativas instaladas pela organização para inspeção TLS.
 tokio-tungstenite = { workspace = true, features = ["rustls-tls-native-roots"] }

@@ -6,7 +6,6 @@ use std::{
 
 use anyhow::{Context, Result};
 use cfp_protocol::*;
-use clap::Parser;
 use futures_util::{SinkExt, StreamExt};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -16,20 +15,35 @@ use tokio::{
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{info, warn};
 
-#[derive(Parser)]
 struct Args {
-    #[arg(long, env = "CFP_SERVER")]
     server: String,
-    #[arg(long, env = "CFP_TOKEN")]
     token: String,
+}
+
+impl Args {
+    /// Le a configuracao do ambiente. `clap` fazia o mesmo por derive, mas
+    /// custava ~185 KB no binario para duas variaveis; o painel ja documenta a
+    /// execucao por `CFP_SERVER`/`CFP_TOKEN`.
+    fn from_env() -> Result<Self> {
+        Ok(Self {
+            server: var("CFP_SERVER")?,
+            token: var("CFP_TOKEN")?,
+        })
+    }
+}
+
+fn var(nome: &str) -> Result<String> {
+    std::env::var(nome).with_context(|| format!("defina a variavel de ambiente {nome}"))
 }
 
 type Streams = Arc<Mutex<HashMap<u32, mpsc::Sender<Vec<u8>>>>>;
 
-#[tokio::main]
+#[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt().with_env_filter("info").init();
-    let args = Args::parse();
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::INFO)
+        .init();
+    let args = Args::from_env()?;
     let mut delay = 1;
     loop {
         let started = Instant::now();

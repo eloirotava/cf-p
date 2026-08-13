@@ -73,7 +73,12 @@ jobs:
         run: cargo install cross --locked
 
       - name: Build optimized binaries
-        run: cross build --release --locked --target "${{ matrix.target }}" --workspace
+        # Um build por pacote: com `--workspace` o Cargo unifica as features, e o
+        # cliente herdaria as do servidor (env-filter, tokio multi-thread),
+        # desfazendo a reducao de tamanho do agente.
+        run: |
+          cross build --release --locked --target "${{ matrix.target }}" -p cfp-client
+          cross build --release --locked --target "${{ matrix.target }}" -p cfp-server
 
       - name: Package binaries
         env:

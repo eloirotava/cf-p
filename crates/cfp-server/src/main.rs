@@ -80,7 +80,9 @@ fn default_public_url() -> String {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt().with_env_filter("info").init();
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::INFO)
+        .init();
     let config_path = PathBuf::from(Args::parse().config);
     let cfg: Config = serde_yaml::from_reader(File::open(&config_path)?)?;
     validate_config(&cfg)?;
