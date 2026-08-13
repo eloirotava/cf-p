@@ -21,7 +21,10 @@ serde_yaml = "0.9"
 sha2 = "0.10"
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time", "io-util"] }
 tokio-rustls = "0.26"
-tokio-tungstenite = { version = "0.27", features = ["rustls-tls-webpki-roots"] }
+# Sem as raizes publicas embutidas: o cliente confia apenas no trust store do
+# sistema, que e onde as CAs corporativas ja aparecem. Exige que o SO tenha
+# `ca-certificates` instalado.
+tokio-tungstenite = { version = "0.27" }
 tracing = "0.1"
 # `env-filter` traz um motor de regex completo (matchers + regex-automata +
 # regex-syntax) para avaliar um filtro que e constante no codigo: ~377 KB.

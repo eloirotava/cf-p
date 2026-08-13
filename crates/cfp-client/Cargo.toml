@@ -7,12 +7,17 @@ license.workspace = true
 [dependencies]
 anyhow.workspace = true
 cfp-protocol = { path = "../cfp-protocol" }
+# O provedor criptografico precisa ser escolhido explicitamente: as features de
+# trust store do tungstenite so decidem em quais CAs confiar. Sem exatamente um
+# de `ring`/`aws-lc-rs`, o rustls entra em panico ao abrir a primeira conexao.
+# `ring` e menor e dispensa o build C com cmake do aws-lc-sys.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 futures-util.workspace = true
 # O cliente e ligado a I/O, nao a CPU: um runtime de thread unica basta e
 # dispensa o agendador multi-thread e o tratamento de sinais.
 tokio = { version = "1", default-features = false, features = ["macros", "net", "rt", "sync", "time", "io-util"] }
-# Além das raízes públicas embutidas, carrega o trust store nativo. No Windows
-# isso inclui CAs corporativas instaladas pela organização para inspeção TLS.
+# Carrega o trust store nativo. No Windows isso inclui CAs corporativas
+# instaladas pela organização para inspeção TLS.
 tokio-tungstenite = { workspace = true, features = ["rustls-tls-native-roots"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true

@@ -439,6 +439,13 @@ Let's Encrypt pelo próprio proxy é o caminho mais simples.
 
 ### Teste ponta a ponta com uma terceira máquina
 
+> **Sempre teste com `wss://`, nunca só com `ws://`.** Um cliente sem provedor
+> criptográfico compila, encaminha tráfego por `ws://` normalmente e só entra em
+> pânico ao abrir a primeira conexão TLS. Um teste rápido é apontar o cliente
+> para o servidor real com um token inválido de propósito: a resposta
+> `servidor recusou a autenticacao` prova que o handshake TLS completou, sem
+> mexer em nenhuma sessão ativa.
+
 As mensagens `tunel autenticado` no cliente e `rota ativa` no servidor já
 confirmam WSS, token e abertura de `33890`. Para comprovar que bytes atravessam
 o túnel sem depender de RDP, faça este teste temporário.
